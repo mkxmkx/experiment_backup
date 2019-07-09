@@ -46,14 +46,11 @@ if __name__ == "__main__":
       saver.restore(session, ckpt.model_checkpoint_path)
 
     initial_time = time.time()
-    queue_runner = tf.train.start_queue_runners(session, coord=coord)
     while True:
       tf_loss, post_topic_relation_score, pre_topic_relation_score, tf_global_step, _ = session.run([model.loss, model.post_topic_relation_score, model.pre_topic_relation_score, model.global_step, model.train_op])
       accumulated_loss += tf_loss
       print("loss: {}, post_topic_relation_score: {}, pre_topic_relation_score: {}".format(tf_loss, post_topic_relation_score, pre_topic_relation_score))
 
-      coord.request_stop()
-      coord.join(queue_runner)
 
       if tf_global_step % report_frequency == 0:
         total_time = time.time() - initial_time

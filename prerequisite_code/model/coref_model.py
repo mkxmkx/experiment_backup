@@ -86,14 +86,13 @@ class CorefModel(object):
   def start_enqueue_thread(self, session):
     with open(self.config["train_path"]) as f:
       train_examples = [json.loads(jsonline) for jsonline in f.readlines()]   #载入训练数据
-      run_options = tf.RunOptions(timeout_in_ms=100000)
     def _enqueue_loop():
       while True:
         random.shuffle(train_examples)
         for example in train_examples:
           tensorized_example = self.tensorize_example(example, is_training=True)
           feed_dict = dict(zip(self.queue_input_tensors, tensorized_example))
-          session.run(self.enqueue_op, feed_dict=feed_dict, options=run_options)    # feed_dict={ self.queue_input_tensors : tensorized_example}，初始化self.queue_input_tensors
+          session.run(self.enqueue_op, feed_dict=feed_dict)    # feed_dict={ self.queue_input_tensors : tensorized_example}，初始化self.queue_input_tensors
     enqueue_thread = threading.Thread(target=_enqueue_loop)
     enqueue_thread.daemon = True
     enqueue_thread.start()

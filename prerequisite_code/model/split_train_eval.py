@@ -6,12 +6,12 @@ def split_train_eval():
     # train_file = codecs.open("/home/makexin/makexin/Experiment/data/v4/Global_warming/train_topic_pair_sentences_train_data.json", 'w', 'utf-8')
     # eval_file = codecs.open("/home/makexin/makexin/Experiment/data/v4/Global_warming/eval_topic_pair_sentences_train_data.json", 'w', 'utf-8')
     readfile = codecs.open(
-        "/home/makexin/makexin/Experiment/data/v1/topic_pair_sentences_train_data.json", 'r', 'utf-8')
+        "/home/makexin/makexin/Experiment/data/v2/topic_pair_sentences_train_data.json", 'r', 'utf-8')
     train_file = codecs.open(
-        "/home/makexin/makexin/Experiment/data/v1/train_topic_pair_sentences_train_data.json", 'w',
+        "/home/makexin/makexin/Experiment/data/v2/train_topic_pair_sentences_train_data.json", 'w',
         'utf-8')
     eval_file = codecs.open(
-        "/home/makexin/makexin/Experiment/data/v1/eval_topic_pair_sentences_train_data.json", 'w',
+        "/home/makexin/makexin/Experiment/data/v2/eval_topic_pair_sentences_train_data.json", 'w',
         'utf-8')
     while True:
         line = readfile.readline().strip()

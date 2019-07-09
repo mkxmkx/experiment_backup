@@ -46,6 +46,10 @@ if __name__ == "__main__":
 
     initial_time = time.time()
     while True:
+
+      #coord = tf.train.Coordinator()
+      #threads = tf.train.start_queue_runners(sess=session, coord=coord)
+
       tf_loss, post_topic_relation_score, pre_topic_relation_score, tf_global_step, _ = session.run([model.loss, model.post_topic_relation_score, model.pre_topic_relation_score, model.global_step, model.train_op])
       accumulated_loss += tf_loss
       print("loss: {}, post_topic_relation_score: {}, pre_topic_relation_score: {}".format(tf_loss, post_topic_relation_score, pre_topic_relation_score))
@@ -71,3 +75,6 @@ if __name__ == "__main__":
 
 
         print("[{}] evaL_f1={:.2f}, max_f1={:.2f}, eval_precision={:.2f}, eval_recall={:.2f}".format(tf_global_step, eval_f1, max_f1, eval_precision, eval_recall))
+
+      #coord.request_stop()
+      #coord.join(threads)

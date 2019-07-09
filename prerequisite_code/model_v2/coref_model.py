@@ -725,7 +725,7 @@ class CorefModel(object):
       #context_outputs = tf.Print(context_outputs, [context_outputs], "context outputs")
       #context_outputs = tf.debugging.check_numerics(context_outputs, " check numbers context_outputs")
 
-      context_outputs = tf.reshape(context_outputs, [batch_size, -1, util.shape(context_outputs, 1)])   #[batch_size, num_words, emb]
+      # context_outputs = tf.reshape(context_outputs, [batch_size, -1, util.shape(context_outputs, 1)])   #[batch_size, num_words, emb]
       num_words = util.shape(context_outputs, 1)
       print("context outputs: ", context_outputs.get_shape())
       print("num words: ",num_words)
@@ -797,12 +797,22 @@ class CorefModel(object):
       k = tf.to_int32(tf.floor(tf.to_float(tf.shape(context_outputs)[1]) * self.config["top_span_ratio"]))  # 确定top k
       print("top k值: ", k)
       # 使用自定义的操作对span排序
-      top_span_indices = coref_ops.extract_spans(tf.expand_dims(candidate_mention_scores, 0),
-                                                 tf.expand_dims(candidate_starts, 0),
-                                                 tf.expand_dims(candidate_ends, 0),
+      # top_span_indices = coref_ops.extract_spans(tf.expand_dims(candidate_mention_scores, 0),
+      #                                            tf.expand_dims(candidate_starts, 0),
+      #                                            tf.expand_dims(candidate_ends, 0),
+      #                                            tf.expand_dims(k, 0),
+      #                                            util.shape(context_outputs, 0),
+      #                                            True)  # [1, k]
+      top_span_indices_list = []
+      for i in range(batch_size):
+          top_span_indices_tmp = coref_ops.extract_spans(tf.expand_dims(candidate_mention_scores[i], 0),
+                                                 tf.expand_dims(candidate_starts[i], 0),
+                                                 tf.expand_dims(candidate_ends[i], 0),
                                                  tf.expand_dims(k, 0),
-                                                 util.shape(context_outputs, 0),
+                                                 util.shape(context_outputs[i], 0),
                                                  True)  # [1, k]
+          top_span_indices_list.append(top_span_indices_tmp)
+      top_span_indices = tf.convert_to_tensor(top_span_indices_list)
       print("top span indices shape: ", top_span_indices.get_shape())
       top_span_indices.set_shape([batch_size, 1, None])
       top_span_indices = tf.squeeze(top_span_indices, 1)  # [batch_size, k]
@@ -1036,6 +1046,7 @@ class CorefModel(object):
       flattened_emb = tf.reshape(emb, [num_sentences * max_sentence_length, util.shape(emb, 2)])
     else:
       raise ValueError("Unsupported rank: {}".format(emb_rank))
+
     return tf.boolean_mask(flattened_emb, tf.reshape(text_len_mask, [num_sentences * max_sentence_length]))
   def flatten_emb_by_batch_sentence(self, emb, text_len_mask):
     batch_size = tf.shape(emb)[0]
@@ -1106,10 +1117,14 @@ class CorefModel(object):
             text_outputs = highway_gates * text_outputs + (1 - highway_gates) * current_inputs
           current_inputs = text_outputs
 
-
+          print("text outputs: ", text_outputs.get_shape())
           outputs = self.flatten_emb_by_sentence(text_outputs, text_len_mask)   # [batch_size * num_sentences, max_sentence_length, emb]
           #outputs = tf.debugging.check_numerics(outputs, "check outputs")
           # outputs = tf.Print(outputs, [outputs], "outputs: ")
+          print("outputs: ", outputs.get_shape())
+          outputs_emb = util.shape(outputs, 1)
+          outputs = tf.reshape(outputs, [batch_size, -1])
+          outputs = tf.reshape(outputs, [batch_size, -1, outputs_emb])
           print("outputs: ", outputs.get_shape())
     return outputs
 
