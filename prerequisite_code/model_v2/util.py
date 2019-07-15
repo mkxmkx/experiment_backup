@@ -89,7 +89,8 @@ def ffnn(inputs, num_hidden_layers, hidden_size, output_size, dropout, output_we
     current_inputs = inputs
 
   for i in range(num_hidden_layers):
-    hidden_weights = tf.get_variable("hidden_weights_{}".format(i), [shape(current_inputs, 1), hidden_size])
+    #hidden_weights = tf.get_variable("hidden_weights_{}".format(i), [shape(current_inputs, 1), hidden_size])
+    hidden_weights = tf.get_variable("hidden_weights_{}".format(i), [current_inputs.get_shape()[1].value, hidden_size])
     hidden_bias = tf.get_variable("hidden_bias_{}".format(i), [hidden_size])
     current_outputs = tf.nn.relu(tf.nn.xw_plus_b(current_inputs, hidden_weights, hidden_bias))
 
@@ -143,10 +144,13 @@ def batch_gather(emb, indices):
     emb_size = 1
   flattened_emb = tf.reshape(emb, [batch_size * seqlen, emb_size])  # [batch_size * seqlen, emb]
   indices = tf.reshape(indices, [batch_size * shape(indices, 1), -1])
-  offset = tf.expand_dims(tf.range(batch_size) * seqlen, 1)  # [batch_size, 1]
-  gathered = tf.gather(flattened_emb, indices + offset) # [batch_size, num_indices, emb]
+  #offset = tf.expand_dims(tf.range(batch_size) * seqlen, 1)  # [batch_size, 1]
+  #gathered = tf.gather(flattened_emb, indices + offset) # [batch_size, num_indices, emb]
+  gathered = tf.gather(flattened_emb, indices)  # [batch_size, num_indices, emb]
   if len(emb.get_shape()) == 2:
     gathered = tf.squeeze(gathered, 2) # [batch_size, num_indices]
+  if len(emb.get_shape()) == 3:
+    gathered = tf.reshape(gathered, [batch_size, shape(gathered, 1), -1])
   return gathered
 
 def bach_gather_with_equal_shape(emb, indices):

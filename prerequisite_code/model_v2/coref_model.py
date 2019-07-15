@@ -12,6 +12,7 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_hub as hub
 import h5py
+import tensorflow.contrib.eager as tfe
 
 from model_v2 import util
 from model_v2 import coref_ops
@@ -55,6 +56,7 @@ class CorefModel(object):
 
 
     self.queue_input_tensors = [tf.placeholder(dtype, shape) for dtype, shape in input_props]   #输入数据初始化
+
     dtypes, shapes = zip(*input_props)
     try:
         queue = tf.PaddingFIFOQueue(capacity=self.config["batch_size"] * 2, dtypes=dtypes, shapes=shapes)  # 创建先进先出队列
@@ -91,12 +93,20 @@ class CorefModel(object):
       train_examples = [json.loads(jsonline) for jsonline in f.readlines()]   #载入训练数据
     def _enqueue_loop():
       while True:
+
+        # coord = tf.train.Coordinator()
+        # threads = tf.train.start_queue_runners(coord=coord, sess=session)
+
         random.shuffle(train_examples)
         for example in train_examples:
           tensorized_example = self.tensorize_example(example, is_training=True)
           feed_dict = dict(zip(self.queue_input_tensors, tensorized_example))
           #print("feed_dict: ", feed_dict)
           session.run(self.enqueue_op, feed_dict=feed_dict)    # feed_dict={ self.queue_input_tensors : tensorized_example}，初始化self.queue_input_tensors
+          # coord.request_stop()
+          # coord.join(threads)
+
+
     enqueue_thread = threading.Thread(target=_enqueue_loop)
     enqueue_thread.daemon = True
     enqueue_thread.start()
@@ -602,7 +612,7 @@ class CorefModel(object):
       :param tokens:   [batch_size, tokens]
       :param context_word_emb:   [batch_size, num_sentences, max_sentence_length, emb]
       :param lm_emb:   [batch_size, num_sentences, max_sentence_length, 1024, 3]
-      :param text_len:   [batch_size, sentence_length] , [batch_size, num_sentence, max_sentence_length]
+      :param text_len:   [batch_size, num_sentence] , [batch_size, num_sentence, max_sentence_length]
       :param is_training:   [batch_size, 1]
       :return:
       topic_start_index: [batch_size, 1]
@@ -662,12 +672,14 @@ class CorefModel(object):
       lm_num_layers = util.shape(lm_emb, 4)
 
       batch_max_sentence_length = max_sentence_length[tf.argmax(max_sentence_length, 0)]
+      batch_max_num_sentence = num_sentences[tf.argmax(num_sentences, 0)]
 
       #padding context word emb
       context_word_emb_list = []
       for i in range(batch_size):
           context_word_sentence_length = tf.shape(context_word_emb[i])[1]
-          context_word_emb_tmp = tf.pad(context_word_emb[i], [[0, 0], [0, batch_max_sentence_length-context_word_sentence_length], [0, 0]])
+          context_word_num_sentences_length = tf.shape(context_word_emb[i])[0]
+          context_word_emb_tmp = tf.pad(context_word_emb[i], [[0, batch_max_num_sentence-context_word_num_sentences_length], [0, batch_max_sentence_length-context_word_sentence_length], [0, 0]])
           context_word_emb_list.append(context_word_emb_tmp)
       context_word_emb = tf.convert_to_tensor(context_word_emb_list)
 
@@ -677,18 +689,19 @@ class CorefModel(object):
       lm_emb_list = []
       for i in range(batch_size):
           lm_sentence_length = tf.shape(lm_emb[i])[1]
-          lm_tmp = tf.pad(lm_emb[i], [[0, 0], [0, batch_max_sentence_length-lm_sentence_length], [0, 0], [0, 0]])
+          lm_num_sentence_length = tf.shape(lm_emb[i])[0]
+          lm_tmp = tf.pad(lm_emb[i], [[0, batch_max_num_sentence-lm_num_sentence_length], [0, batch_max_sentence_length-lm_sentence_length], [0, 0], [0, 0]])
           lm_emb_list.append(lm_tmp)
       lm_emb_list = tf.convert_to_tensor(lm_emb_list)
       lm_emb = lm_emb_list   #[batch_size, num_sentences, batch_max_sentences_length, 1024, 3]
 
       #padding text len
-      # text_len_list = []
-      # for i in range(batch_size):
-      #     text_len_sentence_length = tf.shape(text_len[i])[0]
-      #     text_len_tmp = tf.pad(text_len[i], [0, batch_max_sentence_length-text_len_sentence_length])
-      #     text_len_list.append(text_len_tmp)
-      # text_len = tf.convert_to_tensor(text_len_list)  #[batch_size, max_sentence_length]
+      text_len_list = []
+      for i in range(batch_size):
+          text_len_num_sentence = tf.shape(text_len[i])[0]
+          text_len_tmp = tf.pad([text_len[i]], [[0, 0], [0, batch_max_num_sentence-text_len_num_sentence]])
+          text_len_list.append(text_len_tmp[0])
+      text_len = tf.convert_to_tensor(text_len_list)  #[batch_size, max_num_sentence]
 
       with tf.variable_scope("lm_aggregation"):
         self.lm_weights = tf.nn.softmax(
@@ -720,7 +733,7 @@ class CorefModel(object):
       text_len_mask = tf.sequence_mask(text_len, maxlen=batch_max_sentence_length)  # [batch_size, num_sentence, max_sentence_length]
 
       context_outputs = self.lstm_contextualize(context_emb, text_len, text_len_mask,
-                                                "topic")  # [num_words, emb]   经过一个双向lstm的输出    LSTM输出
+                                                "topic")  # [batch_size, num_words, emb]   经过一个双向lstm的输出    LSTM输出
 
       #context_outputs = tf.Print(context_outputs, [context_outputs], "context outputs")
       #context_outputs = tf.debugging.check_numerics(context_outputs, " check numbers context_outputs")
@@ -1003,6 +1016,7 @@ class CorefModel(object):
     '''
 
     if self.config["use_features"]:   #考虑特征信息，距离特征
+      print("top antecedent offsets: ", top_antecedent_offsets.get_shape())
       antecedent_distance_buckets = self.bucket_distance(top_antecedent_offsets) # [batch_size, k, c]
       print("antecedent distance buckets: ", antecedent_distance_buckets.get_shape())
       #antecedent_distance_emb = tf.gather(tf.get_variable("antecedent_distance_emb", [self.config["batch_size"], 10, self.config["feature_size"]]), antecedent_distance_buckets) # [batch_size, k, c]
@@ -1044,10 +1058,30 @@ class CorefModel(object):
       flattened_emb = tf.reshape(emb, [num_sentences * max_sentence_length])
     elif emb_rank == 3:
       flattened_emb = tf.reshape(emb, [num_sentences * max_sentence_length, util.shape(emb, 2)])
+    elif emb_rank == 4:
+      flattened_emb = tf.reshape(emb, [num_sentences * max_sentence_length, util.shape(emb, 2), util.shape(emb, 3) ])
     else:
       raise ValueError("Unsupported rank: {}".format(emb_rank))
 
     return tf.boolean_mask(flattened_emb, tf.reshape(text_len_mask, [num_sentences * max_sentence_length]))
+  def flatten_emb_with_rank_4(self, emb, text_len_mask):
+      batch_size = self.config["batch_size"]
+      result = []
+      max_num_length = 0
+      max_num_length = tf.convert_to_tensor(max_num_length)
+      for i in range(batch_size):
+          tmp = self.flatten_emb_by_sentence(emb[i], text_len_mask[i])
+          result.append(tmp)
+          print("max : ", util.shape(tmp, 0))
+          max_num_length = tf.reduce_max([max_num_length, util.shape(tmp, 0)], 0)
+
+      pad_result_list = []
+      for i in range(batch_size):
+          num_length = util.shape(result[i], 0)
+          result_tmp = tf.pad(result[i], [[0, max_num_length-num_length], [0, 0]])
+          pad_result_list.append(result_tmp)
+      pad_result = tf.convert_to_tensor(pad_result_list)  # [batch_size, num_words, emb]
+      return tf.convert_to_tensor(pad_result)
   def flatten_emb_by_batch_sentence(self, emb, text_len_mask):
     batch_size = tf.shape(emb)[0]
     num_sentences = tf.shape(emb)[1]
@@ -1062,6 +1096,7 @@ class CorefModel(object):
     return tf.boolean_mask(flattened_emb, tf.reshape(text_len_mask, [batch_size , num_sentences * max_sentence_length]))
 
   def lstm_contextualize(self, text_emb, text_len, text_len_mask, topic):
+      #text_len_mask: [batch_size, num_sentence]
     batch_size = text_emb.get_shape()[0].value
     print("batch size :", batch_size)
     num_sentences = tf.shape(text_emb)[1]
@@ -1072,9 +1107,9 @@ class CorefModel(object):
     #num_sentences = tf.shape(text_emb)[0]
 
     current_inputs = text_emb # [batch_size, num_sentences, max_sentence_length, emb]
-    current_inputs = tf.reshape(current_inputs, [-1, batch_max_sentence_length, emb])   #[batch_size*num_sentences, batch_max_sentence_length, emb]
+    current_inputs = tf.reshape(current_inputs, [batch_size*num_sentences, batch_max_sentence_length, emb])   #[batch_size*num_sentences, batch_max_sentence_length, emb]
     print("text emb: ", text_emb.get_shape())
-    print("current input: ", current_inputs.get_shape())
+
     current_num_sentences = tf.shape(current_inputs)[0]
 
 
@@ -1095,8 +1130,7 @@ class CorefModel(object):
 
           current_text_len = tf.reshape(text_len, [-1])
 
-
-
+          print("current input: ", current_inputs.get_shape())
           # 双向LSTM
           (fw_outputs, bw_outputs), _ = tf.nn.bidirectional_dynamic_rnn(
             cell_fw=cell_fw,
@@ -1111,21 +1145,25 @@ class CorefModel(object):
           text_outputs = tf.concat([fw_outputs, bw_outputs], 2)  # [batch_size * num_sentences, max_sentence_length, emb]  将输出拼接
           text_outputs = tf.nn.dropout(text_outputs, self.lstm_dropout)
 
+
           if layer > 0:
             highway_gates = tf.sigmoid(
-              util.projection(text_outputs, util.shape(text_outputs, 2)))  # [batch_size * num_sentences, max_sentence_length, emb]
+              util.projection(text_outputs, util.shape(text_outputs, 2)))  # [batch_size, num_sentences, max_sentence_length, emb]
             text_outputs = highway_gates * text_outputs + (1 - highway_gates) * current_inputs
+          emb_size = util.shape(current_inputs, 2)
           current_inputs = text_outputs
-
+          text_outputs = tf.reshape(text_outputs, [batch_size, num_sentences, batch_max_sentence_length, -1])# [batch_size, num_sentences, max_sentence_length, emb]
           print("text outputs: ", text_outputs.get_shape())
-          outputs = self.flatten_emb_by_sentence(text_outputs, text_len_mask)   # [batch_size * num_sentences, max_sentence_length, emb]
-          #outputs = tf.debugging.check_numerics(outputs, "check outputs")
-          # outputs = tf.Print(outputs, [outputs], "outputs: ")
+          print("text len mask: ", text_len_mask.get_shape())
+
+
+          outputs = self.flatten_emb_with_rank_4(text_outputs, text_len_mask)
+          outputs = tf.reshape(outputs, [batch_size, -1, emb_size])
           print("outputs: ", outputs.get_shape())
-          outputs_emb = util.shape(outputs, 1)
-          outputs = tf.reshape(outputs, [batch_size, -1])
-          outputs = tf.reshape(outputs, [batch_size, -1, outputs_emb])
-          print("outputs: ", outputs.get_shape())
+          # outputs_emb = util.shape(outputs, 1)
+          # outputs = tf.reshape(outputs, [batch_size, -1])
+          # outputs = tf.reshape(outputs, [batch_size, -1, outputs_emb])
+          # print("outputs: ", outputs.get_shape())
     return outputs
 
   def get_predicted_antecedents(self, antecedents, antecedent_scores):

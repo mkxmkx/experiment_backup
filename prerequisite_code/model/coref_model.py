@@ -1038,6 +1038,7 @@ class CorefModel(object):
           state_bw = tf.contrib.rnn.LSTMStateTuple(tf.tile(cell_bw.initial_state.c, [num_sentences, 1]),
                                                    tf.tile(cell_bw.initial_state.h, [num_sentences, 1]))
 
+          print("current input: ", current_inputs.get_shape())
           # 双向LSTM
           (fw_outputs, bw_outputs), _ = tf.nn.bidirectional_dynamic_rnn(
             cell_fw=cell_fw,
@@ -1057,6 +1058,7 @@ class CorefModel(object):
             text_outputs = highway_gates * text_outputs + (1 - highway_gates) * current_inputs
           current_inputs = text_outputs
           #text_outputs = tf.debugging.check_numerics(text_outputs, "check text_outputs")
+          print("text len mask: ", text_len_mask.get_shape())
 
           outputs = self.flatten_emb_by_sentence(text_outputs, text_len_mask)
           #outputs = tf.debugging.check_numerics(outputs, "check outputs")
