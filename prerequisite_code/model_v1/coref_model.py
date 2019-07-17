@@ -606,8 +606,6 @@ class CorefModel(object):
       # head_emb = tf.concat(head_emb_list, 2) # [num_sentences, max_sentence_length, emb]
       context_emb = tf.nn.dropout(context_emb,
                                   self.lexical_dropout)  # [num_sentences, max_sentence_length, emb]    进行dropout
-      #context_emb = tf.debugging.check_numerics(context_emb, "check context_emb")
-      #context_emb = tf.Print(context_emb, [context_emb], "context embedding")
 
 
       # head_emb = tf.nn.dropout(head_emb, self.lexical_dropout) # [num_sentences, max_sentence_length, emb]
@@ -723,7 +721,7 @@ class CorefModel(object):
 
       top_antecedent_scores = tf.concat([dummy_scores, top_antecedent_scores], 1)  # [k, c + 1]
       '''
-
+      
       top_antecedent_cluster_ids = tf.gather(top_span_cluster_ids, top_antecedents) # [k, c]   top antecedent对应的cluster id
       top_antecedent_cluster_ids += tf.to_int32(tf.log(tf.to_float(top_antecedents_mask))) # [k, c]
       same_cluster_indicator = tf.equal(top_antecedent_cluster_ids, tf.expand_dims(top_span_cluster_ids, 1)) # [k, c]
