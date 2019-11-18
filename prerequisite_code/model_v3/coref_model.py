@@ -568,6 +568,7 @@ class CorefModel(object):
       weight = 2.0
       loss = tf.nn.weighted_cross_entropy_with_logits(logits=score, targets=label, pos_weight=weight)
       loss += tf.add_n(tf.get_collection('losses'))
+
       return tf.reduce_mean(loss)
 
   def softmax_cross_entropy_with_logits(self, label, logits):

@@ -573,8 +573,8 @@ class CorefModel(object):
     # return tf.reduce_sum(result)
 
   def topic_span_similarity(self, topic_emb, span_emb, dim):
-      # similarity = self.topic_span_euclidean(topic_emb, span_emb, dim)
-      similarity = self.topic_span_manhattan(topic_emb, span_emb, dim)
+      similarity = self.topic_span_euclidean(topic_emb, span_emb, dim)
+      # similarity = self.topic_span_manhattan(topic_emb, span_emb, dim)
       return similarity
 
   def topic_span_cosin(self, topic_emb, span_emb, dim):#余弦相似度
@@ -588,7 +588,7 @@ class CorefModel(object):
 
   def topic_span_euclidean(self, topic_emb, span_emb, dim):#欧拉距离
       euclidean = tf.sqrt(tf.reduce_sum(tf.square(topic_emb - span_emb), dim))
-      return euclidean
+      return 1/(1+euclidean)
 
   def topic_span_manhattan(self, topic_emb, span_emb, dim):#曼哈顿距离
       manhattan = tf.reduce_sum(tf.abs(tf.add(topic_emb, tf.negative(span_emb))), dim)

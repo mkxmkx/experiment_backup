@@ -29,7 +29,7 @@ if __name__ == "__main__":
   saver = tf.train.Saver()
 
   TIMESTAMP = "{0:%Y-%m-%dT%H-%M-%S/}".format(datetime.now())
-  log_dir = util.mkdirs(os.path.join(config["log_dir"], "PublicKeyCryptography"))
+  log_dir = util.mkdirs(os.path.join(config["log_dir"], "Parallel_Postulate"))
   writer = tf.summary.FileWriter(log_dir, flush_secs=20)
 
   max_f1 = 0

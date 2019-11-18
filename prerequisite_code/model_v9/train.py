@@ -29,12 +29,13 @@ if __name__ == "__main__":
   saver = tf.train.Saver()
 
   TIMESTAMP = "{0:%Y-%m-%dT%H-%M-%S/}".format(datetime.now())
-  log_dir = util.mkdirs(os.path.join(config["log_dir"], "v1Data_lambda:" + str(config["lambda"])+"_loss5"))
+  log_dir = util.mkdirs(os.path.join(config["log_dir"], "Global_warming"))
   writer = tf.summary.FileWriter(log_dir, flush_secs=20)
 
   max_f1 = 0
   max_presission = 0
   max_recall = 0
+  max_accuracy = 0
   coord = tf.train.Coordinator()
   with tf.Session() as session:
 
@@ -112,13 +113,14 @@ if __name__ == "__main__":
           max_f1 = f
           max_presission = precision
           max_recall = recall
+          max_accuracy = accuracy
           util.copy_checkpoint(os.path.join(log_dir, "model-{}".format(tf_global_step)),
                                os.path.join(log_dir, "model.max.ckpt"))
 
         writer.add_summary(eval_summary, tf_global_step)
 
         print(
-          "[{}] max_f1={:.4f}, max_precision={:.4f}, max recall={:.4f}".format(tf_global_step, max_f1, max_presission,
+          "[{}] max_accuracy={:.4f} max_f1={:.4f}, max_precision={:.4f}, max recall={:.4f}".format(tf_global_step, max_accuracy, max_f1, max_presission,
                                                                                max_recall))
         print(
           "[{}] eval_accuracy={:.4f}, evaL_f1_macro={:.4f}, eval_precision_macro={:.4f}, eval_recall_macro={:.4f}".format(

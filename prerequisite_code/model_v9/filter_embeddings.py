@@ -14,7 +14,16 @@ if __name__ == "__main__":
   if len(sys.argv) < 3:   #输入参数个数大于等于3
     sys.exit("Usage: {} <embeddings> <json1> <json2> ...".format(sys.argv[0]))
 
-  # words_to_keep = set()
+  words_to_keep = set()
+  for json_filename in sys.argv[2:]:   #读入第三个参数文件，将文件中sentence取出放到集合中
+    with open(json_filename) as json_file:
+      for line in json_file.readlines():
+        for sentence in json.loads(line)["pre_sentences"]:
+          words_to_keep.update(sentence)    #将所有训练和测试句子加入到集合中，  "words"是一个句子
+        for sentence in json.loads(line)["post_sentences"]:
+            words_to_keep.update(sentence)
+
+
   # for json_filename in sys.argv[2:]:   #读入第三个参数文件，将文件中sentence取出放到集合中
   #   if(os.path.exists("/home/makexin/makexin/Experiment/data/v4/Global_warming")):
   #     print("dir exist")
@@ -31,15 +40,6 @@ if __name__ == "__main__":
   #         words_to_keep.update(sentence)  # 将所有训练和测试句子加入到集合中，  "words"是一个句子
   #       for sentence in json.loads(line)["post_sentences"]:
   #         words_to_keep.update(sentence)
-
-  words_to_keep = set()
-  for json_filename in sys.argv[2:]:  # 读入第三个参数文件，将文件中sentence取出放到集合中
-    with open(json_filename) as json_file:
-      for line in json_file.readlines():
-        for sentence in json.loads(line)["pre_sentences"]:
-          words_to_keep.update(sentence)  # 将所有训练和测试句子加入到集合中，  "words"是一个句子
-        for sentence in json.loads(line)["post_sentences"]:
-          words_to_keep.update(sentence)
 
   print("Found {} words in {} dataset(s).".format(len(words_to_keep), len(sys.argv) - 2))
 

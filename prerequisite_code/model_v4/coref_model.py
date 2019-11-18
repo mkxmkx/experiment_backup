@@ -595,7 +595,7 @@ class CorefModel(object):
       #L2正则化损失
       tv = tf.trainable_variables()   #得到所有可以训练的参数，即所有trainable=True 的tf.Variable/tf.get_variable
       regularization_cost = self.config['lambda'] * tf.reduce_sum([tf.nn.l2_loss(v) for v in tv])  # 0.001是lambda超参数
-      loss = loss + regularization_cost
+      loss = 5 * loss + regularization_cost
       return tf.reduce_mean(loss)
       # return loss
 
@@ -1069,7 +1069,8 @@ class CorefModel(object):
 
     # accuracy, precision_macro, precision_micro, recall_macro, recall_micro, f_macro, f_micro = evaluate.evaluate(
     #     coref_predictions, self.config)
-    accuracy, precision, recall, f, precision_macro, recall_macro, f_macro = evaluate.evaluate(coref_predictions, self.config)
+    # accuracy, precision, recall, f, precision_macro, recall_macro, f_macro = evaluate.evaluate(coref_predictions, self.config)
+    accuracy, precision_macro, recall_macro, f_macro = evaluate.evaluate(coref_predictions, self.config)
 
     summary_dict["Average accuracy (py)"] = accuracy
     print("Average accuracy (py): {:.4f}%".format(accuracy))
@@ -1083,14 +1084,14 @@ class CorefModel(object):
     summary_dict["Average recall (py)"] = recall_macro
     print("Average recall (py): {:.4f}%".format(recall_macro))
 
-    summary_dict["Average F1 self_compute (py)"] = f
-    print("Average F1 self_compute (py): {:.4f}%".format(f))
-
-    summary_dict["Average precision self_compute (py)"] = precision
-    print("Average precision self_compute (py): {:.4f}%".format(precision))
-
-    summary_dict["Average recall self_compute (py)"] = recall
-    print("Average recall self_compute (py): {:.4f}%".format(recall))
+    # summary_dict["Average F1 self_compute (py)"] = f
+    # print("Average F1 self_compute (py): {:.4f}%".format(f))
+    #
+    # summary_dict["Average precision self_compute (py)"] = precision
+    # print("Average precision self_compute (py): {:.4f}%".format(precision))
+    #
+    # summary_dict["Average recall self_compute (py)"] = recall
+    # print("Average recall self_compute (py): {:.4f}%".format(recall))
     #
     # summary_dict["Average F1 micro (py)"] = f_micro
     # print("Average F1 micro (py): {:.4f}%".format(f_micro))

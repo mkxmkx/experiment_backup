@@ -26,8 +26,8 @@ def evaluate(predictions, config):
             # pred.append(score)
             true.append(label)
     eval_file.close()
-    precision = metrics.precision_score(true, pred, average='macro')
-    recall = metrics.recall_score(true, pred, average='macro')
+    precision = metrics.precision_score(true, pred, average='weighted')
+    recall = metrics.recall_score(true, pred, average='weighted')
     f = metrics.f1_score(true, pred, average='weighted')
     return precision, recall, f
 

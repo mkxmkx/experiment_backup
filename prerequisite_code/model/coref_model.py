@@ -1152,7 +1152,7 @@ class CorefModel(object):
     summary_dict["Average F1 (py)"] = f
     print("Average F1 (py): {:.2f}%".format(f))
 
-    #p,r,f = coref_evaluator.get_prf()
+    # p,r,f = coref_evaluator.get_prf()
 
     summary_dict["Average precision (py)"] = precision
     print("Average precision (py): {:.2f}%".format(precision))

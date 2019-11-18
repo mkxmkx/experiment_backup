@@ -18,6 +18,7 @@ import util
 import coref_ops
 import metrics
 import evaluate
+from tensorboard import summary as summary_lib
 
 
 class CorefModel(object):
@@ -334,7 +335,7 @@ class CorefModel(object):
     # post_topic_emb = tf.squeeze(post_topic_emb)
 
     #span_emb = tf.concat(0,[pre_top_span_emb,post_top_span_emb])  #[2k, emb]
-    span_emb_set = set()
+    # span_emb_set = set()
 
     pre_k = util.shape(pre_top_span_emb, 0)
     # pre_k = pre_top_span_emb.get_shape()[0]
@@ -373,28 +374,28 @@ class CorefModel(object):
 
     # 给定topic，获得和span的余弦相似度值    pre_topic
     temp_pre_topic_emb = tf.tile(pre_topic_emb, [pre_k, 1])   #[pre_k, emb]
-    pre_topic_pre_span_cosin = self.topic_span_cosin(temp_pre_topic_emb, pre_top_span_emb, 1)   #[pre_k]
+    pre_topic_pre_span_cosin = self.topic_span_similarity(temp_pre_topic_emb, pre_top_span_emb, 1)   #[pre_k]
     temp_pre_topic_emb = tf.tile(pre_topic_emb, [post_k, 1])   # [post_k, emb]
-    pre_topic_post_span_cosin = self.topic_span_cosin(temp_pre_topic_emb, post_top_span_emb, 1)   #[post_k]
+    pre_topic_post_span_cosin = self.topic_span_similarity(temp_pre_topic_emb, post_top_span_emb, 1)   #[post_k]
 
     #给定topic，获得和antecedent的余弦相似度值    pre_topic
     temp_pre_topic_emb = tf.tile(tf.expand_dims(pre_topic_emb, 0), [pre_k, pre_c, 1])    # [pre_k, pre_c, emb]
-    pre_topic_pre_antecedent_cosin = self.topic_span_cosin(temp_pre_topic_emb, pre_top_antecedent_emb, 2)    # [pre_k, pre_c]
+    pre_topic_pre_antecedent_cosin = self.topic_span_similarity(temp_pre_topic_emb, pre_top_antecedent_emb, 2)    # [pre_k, pre_c]
     temp_pre_topic_emb = tf.tile(tf.expand_dims(pre_topic_emb, 0), [post_k, post_c, 1])    # [post_k, postc]
-    pre_topic_post_antecedent_cosin = self.topic_span_cosin(temp_pre_topic_emb, post_top_antecedent_emb, 2)   # [post_k, post_c]
+    pre_topic_post_antecedent_cosin = self.topic_span_similarity(temp_pre_topic_emb, post_top_antecedent_emb, 2)   # [post_k, post_c]
 
     # 给定topic，获得和span的余弦相似度值    post_topic
     temp_post_topic_emb = tf.tile(post_topic_emb, [pre_k, 1])  # [pre_k, emb]
-    post_topic_pre_span_cosin = self.topic_span_cosin(temp_post_topic_emb, pre_top_span_emb, 1)  # [pre_k]
+    post_topic_pre_span_cosin = self.topic_span_similarity(temp_post_topic_emb, pre_top_span_emb, 1)  # [pre_k]
     temp_post_topic_emb = tf.tile(post_topic_emb, [post_k, 1])  # [post_k, emb]
-    post_topic_post_span_cosin = self.topic_span_cosin(temp_post_topic_emb, post_top_span_emb, 1)  # [post_k]
+    post_topic_post_span_cosin = self.topic_span_similarity(temp_post_topic_emb, post_top_span_emb, 1)  # [post_k]
 
     # 给定topic，获得和antecedent的余弦相似度值    post_topic
     temp_post_topic_emb = tf.tile(tf.expand_dims(post_topic_emb, 0), [pre_k, pre_c, 1])  # [pre_k, pre_c, emb]
-    post_topic_pre_antecedent_cosin = self.topic_span_cosin(temp_post_topic_emb, pre_top_antecedent_emb,
+    post_topic_pre_antecedent_cosin = self.topic_span_similarity(temp_post_topic_emb, pre_top_antecedent_emb,
                                                            2)  # [pre_k, pre_c]
-    temp_post_topic_emb = tf.tile(tf.expand_dims(post_topic_emb, 0), [post_k, post_c, 1])  # [post_k, postc]
-    post_topic_post_antecedent_cosin = self.topic_span_cosin(temp_post_topic_emb,
+    temp_post_topic_emb = tf.tile(tf.expand_dims(post_topic_emb, 0), [post_k, post_c, 1])  # [post_k, post_c]
+    post_topic_post_antecedent_cosin = self.topic_span_similarity(temp_post_topic_emb,
                                                             post_top_antecedent_emb, 2)  # [post_k, post_c]
 
     # 统计两个主题分别作为先序词的得分
@@ -404,14 +405,25 @@ class CorefModel(object):
     # antecedent为后序词，即先后序关系指向antecedent ， 后学antecedent
 
 
+    # # pre_topic作为后序词    pre_antecedent
+    # pre_topic_relation_score += self.get_topic_relation_score(pre_topic_pre_antecedent_cosin, pre_top_antecedent_scores, post_topic_pre_span_cosin, pre_top_span_mention_scores, post_k, pre_k, pre_c)
+    # # pre topic作为后序词    post antecedent
+    # pre_topic_relation_score += self.get_topic_relation_score(pre_topic_post_antecedent_cosin, post_top_antecedent_scores, post_topic_pre_span_cosin, pre_k, post_k, post_c)
+    # # post topic作为后序词    pre antecedent
+    # post_topic_relation_score += self.get_topic_relation_score(post_topic_pre_antecedent_cosin, pre_top_antecedent_scores, pre_topic_post_span_cosin, post_k, pre_k, pre_c)
+    # # post topic作为后序词     post antecedent
+    # post_topic_relation_score += self.get_topic_relation_score(post_topic_post_antecedent_cosin, post_top_antecedent_scores, pre_topic_pre_span_cosin, pre_k, post_k, post_c)
+
+
     # pre_topic作为后序词    pre_antecedent
-    pre_topic_relation_score += self.get_topic_relation_score(pre_topic_pre_antecedent_cosin, pre_top_antecedent_scores, post_topic_post_span_cosin, post_k, pre_k, pre_c)
+    pre_topic_relation_score += self.get_topic_relation_score(pre_topic_pre_antecedent_cosin, pre_top_antecedent_scores, post_topic_pre_span_cosin, pre_top_span_mention_scores, pre_k, pre_c)
     # pre topic作为后序词    post antecedent
-    pre_topic_relation_score += self.get_topic_relation_score(pre_topic_post_antecedent_cosin, post_top_antecedent_scores, post_topic_pre_span_cosin, pre_k, post_k, post_c)
+    pre_topic_relation_score += self.get_topic_relation_score(pre_topic_post_antecedent_cosin, post_top_antecedent_scores, post_topic_post_span_cosin, post_top_span_mention_scores, post_k, post_c)
     # post topic作为后序词    pre antecedent
-    post_topic_relation_score += self.get_topic_relation_score(post_topic_pre_antecedent_cosin, pre_top_antecedent_scores, pre_topic_post_span_cosin, post_k, pre_k, pre_c)
+    post_topic_relation_score += self.get_topic_relation_score(post_topic_pre_antecedent_cosin, pre_top_antecedent_scores, pre_topic_pre_span_cosin, pre_top_span_mention_scores, pre_k, pre_c)
     # post topic作为后序词     post antecedent
-    post_topic_relation_score += self.get_topic_relation_score(post_topic_post_antecedent_cosin, post_top_antecedent_scores, pre_topic_pre_span_cosin, pre_k, post_k, post_c)
+    post_topic_relation_score += self.get_topic_relation_score(post_topic_post_antecedent_cosin, post_top_antecedent_scores, pre_topic_post_span_cosin, post_top_span_mention_scores, post_k, post_c)
+
 
     # pre_topic_pre_relation = tf.multiply(pre_topic_pre_antecedent_cosin,
     #                                       pre_top_antecedent_scores)  # [pre_k, pre_c]
@@ -472,20 +484,53 @@ class CorefModel(object):
     final_score = post_topic_relation_score - pre_topic_relation_score
 
     final_score = tf.sigmoid(final_score)
+    # final_score = final_score/post_topic_relation_score
 
     loss = self.weighted_cross_entorpy_with_logits(label, final_score)
     # final_score = tf.nn.softmax(tf.convert_to_tensor([post_result, pre_result]))[0]
 
     return loss,post_topic_relation_score, pre_topic_relation_score, label, final_score, [pre_topic_emb, post_topic_emb, pre_top_span_emb, post_top_span_emb, pre_top_span_mention_scores, post_top_span_mention_scores, pre_top_antecedent_emb, post_top_antecedent_emb, pre_top_antecedent_scores, post_top_antecedent_scores, final_score]
 
-  def get_topic_relation_score(self, antecedent_cosin, antecedent_scores, span_cosin, dim1, dim2, dim3):
+  # def get_topic_relation_score(self, antecedent_cosin, antecedent_scores, span_cosin, span_score, dim1, dim2, dim3):
+  #
+  #   '''
+  #
+  #   :param antecedent_cosin:    [dim2, dim3]
+  #   :param antecedent_scores:   [dim2, dim3]
+  #   :param span_cosin:   [dim1]
+  #   :param span_score:  [dim1]
+  #   :param dim1:
+  #   :param dim2:
+  #   :param dim3:
+  #   :return:
+  #   '''
+  #
+  #   metric = self.config["related_metric"]
+  #
+  #   # 例子，pre_topic作为后序词    和pre_antecedent相关
+  #   pre_topic_pre_relation = tf.multiply(antecedent_cosin,
+  #                                        antecedent_scores)  # [pre_k, pre_c]   [dim2, dim3]
+  #   pre_topic_pre_relation = tf.tile(tf.expand_dims(pre_topic_pre_relation, 0),
+  #                                    [dim1, 1, 1])  # [post_k, pre_k, pre_c]   [dim1, dim2, dim3]
+  #   temp_post_topic_post_span_cosin = tf.tile(tf.expand_dims(tf.expand_dims(span_cosin, 1), 1),
+  #                                             [1, dim2, dim3])  # [post_k, pre_k, pre_c]   [dim1, dim2, dim3]
+  #   temp_pre_topic_pre_antecedent_cosin = tf.tile(tf.expand_dims(antecedent_cosin, 0),
+  #                                                 [dim1, 1, 1])  # [post_k, pre_k, pre_c]   [dim1, dim2, dim3]
+  #   pre_topic_pre_mask = tf.logical_and(
+  #     tf.greater_equal(temp_post_topic_post_span_cosin, tf.fill([dim1, dim2, dim3], metric)),
+  #     tf.greater_equal(temp_pre_topic_pre_antecedent_cosin, tf.fill([dim1, dim2, dim3], metric)))
+  #   pre_topic_as_antecedent = tf.boolean_mask(pre_topic_pre_relation, pre_topic_pre_mask)
+  #   return tf.reduce_sum(pre_topic_as_antecedent)
+  #   #return tf.reduce_mean(pre_topic_as_antecedent)
+
+  def get_topic_relation_score(self, antecedent_cosin, antecedent_scores, span_cosin, span_score, dim2, dim3):
 
     '''
 
     :param antecedent_cosin:    [dim2, dim3]
     :param antecedent_scores:   [dim2, dim3]
-    :param span_cosin:   [dim1]
-    :param dim1:
+    :param span_cosin:   [dim2]
+    :param span_score:  [dim2]
     :param dim2:
     :param dim3:
     :return:
@@ -494,22 +539,47 @@ class CorefModel(object):
     metric = self.config["related_metric"]
 
     # 例子，pre_topic作为后序词    和pre_antecedent相关
-    pre_topic_pre_relation = tf.multiply(antecedent_cosin,
+    pre_topic_pre_antecedent_relation = tf.multiply(antecedent_cosin,
                                          antecedent_scores)  # [pre_k, pre_c]   [dim2, dim3]
-    pre_topic_pre_relation = tf.tile(tf.expand_dims(pre_topic_pre_relation, 0),
-                                     [dim1, 1, 1])  # [post_k, pre_k, pre_c]   [dim1, dim2, dim3]
-    temp_post_topic_post_span_cosin = tf.tile(tf.expand_dims(tf.expand_dims(span_cosin, 1), 1),
-                                              [1, dim2, dim3])  # [post_k, pre_k, pre_c]   [dim1, dim2, dim3]
-    temp_pre_topic_pre_antecedent_cosin = tf.tile(tf.expand_dims(antecedent_cosin, 0),
-                                                  [dim1, 1, 1])  # [post_k, pre_k, pre_c]   [dim1, dim2, dim3]
-    pre_topic_pre_mask = tf.logical_and(
-      tf.greater_equal(temp_post_topic_post_span_cosin, tf.fill([dim1, dim2, dim3], metric)),
-      tf.greater_equal(temp_pre_topic_pre_antecedent_cosin, tf.fill([dim1, dim2, dim3], metric)))
-    pre_topic_as_antecedent = tf.boolean_mask(pre_topic_pre_relation, pre_topic_pre_mask)
-    return tf.reduce_sum(pre_topic_as_antecedent)
-    #return tf.reduce_mean(pre_topic_as_antecedent)
+    post_topic_pre_span_relation = tf.multiply(span_cosin, span_score)   # [pre_k]
+    post_topic_pre_span_relation = tf.tile(tf.expand_dims(post_topic_pre_span_relation, 1),
+                                              [1, dim3])  # [pre_k, pre_c]   [dim2, dim3]
+    span_cosin_expand = tf.tile(tf.expand_dims(span_cosin, 1), [1, dim3])  # [dim2, dim3]
 
-  def topic_span_cosin(self, topic_emb, span_emb, dim):
+
+    pre_topic_pre_mask = tf.logical_and(
+      tf.greater_equal(pre_topic_pre_antecedent_relation, tf.fill([dim2, dim3], metric)),
+      tf.greater_equal(post_topic_pre_span_relation, tf.fill([dim2, dim3], metric)))
+    # cosin_mask = tf.logical_and(
+    #     tf.greater_equal(antecedent_cosin, tf.fill([dim2, dim3], 0.1)),
+    #     tf.greater_equal(span_cosin_expand, tf.fill([dim2, dim3], 0.1))
+    # )
+    # pre_topic_pre_mask = tf.logical_and(pre_topic_pre_mask, cosin_mask)
+    pre_topic_as_antecedent = tf.boolean_mask(pre_topic_pre_antecedent_relation, pre_topic_pre_mask)
+    return tf.reduce_sum(pre_topic_as_antecedent)
+    # return tf.reduce_mean(pre_topic_as_antecedent)
+
+    # 修改部分
+    # flatten_mask = tf.reshape(pre_topic_pre_mask, [-1])
+    # pre_topic_as_antecedent = tf.boolean_mask(tf.reshape(pre_topic_pre_antecedent_relation, [-1]), flatten_mask)
+    # top_k_result = tf.to_int32(tf.ceil(tf.to_float(tf.size(pre_topic_as_antecedent)) * self.config["top_result_ratio"]))  # 确定top k
+    # print("pre topic as antecedent shape: ", pre_topic_as_antecedent.get_shape())
+    # print("top k result: ", top_k_result)
+    # result = tf.cond(tf.greater(top_k_result, 0), lambda : tf.nn.top_k(pre_topic_as_antecedent, top_k_result)[0], lambda : pre_topic_as_antecedent)
+
+    # result = tf.nn.top_k(pre_topic_as_antecedent, top_k_result)
+    # result = result[0]
+
+    # return tf.reduce_sum(result)
+
+
+
+  def topic_span_similarity(self, topic_emb, span_emb, dim):
+      similarity = self.topic_span_euclidean(topic_emb, span_emb, dim)
+      # similarity = self.topic_span_manhattan(topic_emb, span_emb, dim)
+      return similarity
+
+  def topic_span_cosin(self, topic_emb, span_emb, dim):#余弦相似度
     #求模
     topic_norm = tf.sqrt(tf.reduce_sum(tf.square(topic_emb), axis=dim))
     span_norm = tf.sqrt(tf.reduce_sum(tf.square(span_emb), axis=dim))
@@ -518,15 +588,29 @@ class CorefModel(object):
     cosin = tf.divide(topic_span, tf.multiply(topic_norm, span_norm))
     return cosin
 
+  def topic_span_euclidean(self, topic_emb, span_emb, dim):#欧拉距离
+      euclidean = tf.sqrt(tf.reduce_sum(tf.square(topic_emb - span_emb), dim))
+      return 1/(1+euclidean)
+
+  def topic_span_manhattan(self, topic_emb, span_emb, dim):#曼哈顿距离
+      manhattan = tf.reduce_sum(tf.abs(tf.add(topic_emb, tf.negative(span_emb))), dim)
+      return manhattan
+
   def corss_entropy_loss(self, label, score):
       loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=label, logits=score)
       return tf.reduce_mean(loss)
 
   def weighted_cross_entorpy_with_logits(self, label, score):
-      weight = 4.0
+      weight = 2.0
       loss = tf.nn.weighted_cross_entropy_with_logits(logits=score, targets=label, pos_weight=weight)
-      loss += tf.add_n(tf.get_collection('losses'))
+      # loss += tf.add_n(tf.get_collection('losses'))
+
+      #L2正则化损失
+      tv = tf.trainable_variables()   #得到所有可以训练的参数，即所有trainable=True 的tf.Variable/tf.get_variable
+      regularization_cost = self.config['lambda'] * tf.reduce_sum([tf.nn.l2_loss(v) for v in tv])  # 0.001是lambda超参数
+      loss = loss + regularization_cost
       return tf.reduce_mean(loss)
+      # return loss
 
   def softmax_cross_entropy_with_logits(self, label, logits):
       if label - 1 == 0:
@@ -760,12 +844,12 @@ class CorefModel(object):
 
 
 
-    if self.config["use_features"]:    #span也考虑特征, span 宽度embedding
-      span_width_index = span_width - 1 # [k]
-      with tf.variable_scope("{}".format(span_name)):
-        span_width_emb = tf.gather(tf.get_variable("span_width_embeddings", [self.config["max_span_width"], self.config["feature_size"]]), span_width_index) # [k, emb]
-      span_width_emb = tf.nn.dropout(span_width_emb, self.dropout)
-      span_emb_list.append(span_width_emb)
+    # if self.config["use_features"]:    #span也考虑特征, span 宽度embedding
+    #   span_width_index = span_width - 1 # [k]
+    #   with tf.variable_scope("{}".format(span_name)):
+    #     span_width_emb = tf.gather(tf.get_variable("span_width_embeddings", [self.config["max_span_width"], self.config["feature_size"]]), span_width_index) # [k, emb]
+    #   span_width_emb = tf.nn.dropout(span_width_emb, self.dropout)
+    #   span_emb_list.append(span_width_emb)
 
 
     if self.config["model_heads"]:   #head attention部分  猜测
@@ -996,22 +1080,40 @@ class CorefModel(object):
     #conll_results = conll.evaluate_conll(self.config["conll_eval_path"], coref_predictions, official_stdout)
     #average_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
 
-    accuracy, precision_macro, precision_micro, recall_macro, recall_micro, f = evaluate.evaluate(coref_predictions, self.config)
-    summary_dict["Average F1 (py)"] = f
-    print("Average F1 (py): {:.4f}%".format(f))
-
-    # p,r,f = coref_evaluator.get_prf()
+    # accuracy, precision_macro, precision_micro, recall_macro, recall_micro, f_macro, f_micro = evaluate.evaluate(
+    #     coref_predictions, self.config)
+    # accuracy, precision, recall, f, precision_macro, recall_macro, f_macro = evaluate.evaluate(coref_predictions, self.config)
+    accuracy, precision_macro, recall_macro, f_macro = evaluate.evaluate(coref_predictions, self.config)
 
     summary_dict["Average accuracy (py)"] = accuracy
     print("Average accuracy (py): {:.4f}%".format(accuracy))
 
+    summary_dict["Average F1 (py)"] = f_macro
+    print("Average F1 (py): {:.4f}%".format(f_macro))
+
     summary_dict["Average precision (py)"] = precision_macro
-    print("Average precision macro (py): {:.4f}%".format(precision_macro))
-    print("Average precision micro (py): {:.4f}%".format(precision_micro))
+    print("Average precision (py): {:.4f}%".format(precision_macro))
 
     summary_dict["Average recall (py)"] = recall_macro
-    print("Average recall macro (py): {:.4f}%".format(recall_macro))
-    print("Average recall micro (py): {:.4f}%".format(recall_micro))
+    print("Average recall (py): {:.4f}%".format(recall_macro))
 
-    return util.make_summary(summary_dict), f, accuracy, precision_macro, recall_macro
+    # summary_dict["Average F1 self_compute (py)"] = f
+    # print("Average F1 self_compute (py): {:.4f}%".format(f))
+    #
+    # summary_dict["Average precision self_compute (py)"] = precision
+    # print("Average precision self_compute (py): {:.4f}%".format(precision))
+    #
+    # summary_dict["Average recall self_compute (py)"] = recall
+    # print("Average recall self_compute (py): {:.4f}%".format(recall))
+    #
+    # summary_dict["Average F1 micro (py)"] = f_micro
+    # print("Average F1 micro (py): {:.4f}%".format(f_micro))
+    #
+    # summary_dict["Average precision micro (py)"] = precision_micro
+    # print("Average precision micro (py): {:.4f}%".format(precision_micro))
+    #
+    # summary_dict["Average recall micro (py)"] = recall_micro
+    # print("Average recall micro (py): {:.4f}%".format(recall_micro))
+
+    return util.make_summary(summary_dict), accuracy, f_macro, precision_macro, recall_macro
 

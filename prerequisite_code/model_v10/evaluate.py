@@ -6,7 +6,8 @@ from sklearn import metrics
 def evaluate(predictions, config):
     '''
     :param predictions: file_key = example["pre_topic"] + "_" + example["post_topic"]
-    predictions[file_key] = [final_score, original_label, example["pre_topic"], example["post_topic"]]
+    predictions[file_key] = [final_score, original_label, example["pre_topic"], example["post_topic"], pre_topic_pre_mention_to_predicted, pre_topic_post_mention_to_predicted,
+                                     post_topic_pre_mention_to_predicted, post_topic_post_mention_to_predicted]
     :param config:
     :return: precision, recall, f
     '''
@@ -34,7 +35,9 @@ def evaluate(predictions, config):
             pre_topic = result[2]
             post_topic = result[3]
             #print("pre topic: " + pre_topic + '\t' + "post topic: " + post_topic + "\t" + "predicted score: " + str(score) + '\t' + "true label: " + str(label))
-            eval_file.write("pre topic: " + pre_topic + '\t' + "post topic: " + post_topic + "\t" + "predicted score: " + str(score) + '\t' + "true label: " + str(label) + '\n')
+            eval_file.write("pre topic: " + pre_topic + '\t' + "post topic: " + post_topic + "\t" + "predicted score: " + str(score) + '\t' + "true label: " + str(label) + '\n'
+                            + "pre_topic_pre_mention_to_predicted: " + str(result[4]) + '\n'+ "pre_topic_post_mention_to_predicted: " + str(result[5]) + '\n'
+                            + "post_topic_pre_mention_to_predicted: " + str(result[6]) + '\n' + "post_topic_post_mention_to_predicted: " + str(result[7]) + "\n")
             if score > config["result_metric"]:
                 pred.append(1)
                 if label == 0:
