@@ -1,0 +1,3 @@
+在prerequisite_code/model_v7基础上改进。
+TutorialBank数据集上，v2数据集（即只考虑对应维基页面上文本，不考虑链接到的文本）
+修改考虑的span长度参数
