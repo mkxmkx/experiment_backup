@@ -18,15 +18,17 @@ import util
 import coref_ops
 import metrics
 import evaluate
+from tensorboard import summary as summary_lib
 
 
 class CorefModel(object):
   def __init__(self, config):
+    print("in model v1")
     self.config = config
     self.context_embeddings = util.EmbeddingDictionary(config["context_embeddings"])
-    #self.head_embeddings = util.EmbeddingDictionary(config["head_embeddings"], maybe_cache=self.context_embeddings)
-    #self.char_embedding_size = config["char_embedding_size"]
-    #self.char_dict = util.load_char_dict(config["char_vocab_path"])
+    self.head_embeddings = util.EmbeddingDictionary(config["head_embeddings"], maybe_cache=self.context_embeddings)
+    self.char_embedding_size = config["char_embedding_size"]
+    self.char_dict = util.load_char_dict(config["char_vocab_path"])
     self.max_span_width = config["max_span_width"]
     #self.genres = { g:i for i,g in enumerate(config["genres"]) }
     if config["lm_path"]:
@@ -38,6 +40,8 @@ class CorefModel(object):
     self.eval_data = None # Load eval data lazily.
 
     input_props = []
+    input_props.append((tf.string, []))   # pre topic
+    input_props.append((tf.string, []))   # post topic
     input_props.append((tf.int32, [None]))  #pre_topic start index
     input_props.append((tf.int32, [None]))  #pre topic end index
     input_props.append((tf.int32, [None]))  # post topic start index
@@ -48,10 +52,12 @@ class CorefModel(object):
     input_props.append((tf.string, [None, None]))  # post_Tokens.
     input_props.append((tf.float32, [None, None, self.context_embeddings.size])) # pre Context embeddings.
     input_props.append((tf.float32, [None, None, self.context_embeddings.size]))  # post Context embeddings.
-    #input_props.append((tf.float32, [None, None, self.head_embeddings.size])) # Head embeddings.
+    input_props.append((tf.float32, [None, None, self.head_embeddings.size])) # pre Head embeddings.
+    input_props.append((tf.float32, [None, None, self.head_embeddings.size]))  # post Head embeddings.
     input_props.append((tf.float32, [None, None, self.lm_size, self.lm_layers])) # pre LM embeddings. ELMo   lm_file
     input_props.append((tf.float32, [None, None, self.lm_size, self.lm_layers]))  # post LM embeddings. ELMo   lm_file
-    #input_props.append((tf.int32, [None, None, None])) # Character indices.   #字符索引
+    input_props.append((tf.int32, [None, None, None])) # pre Character indices.   #字符索引
+    input_props.append((tf.int32, [None, None, None]))  # post Character indices.
     input_props.append((tf.int32, [None])) # pre Text lengths.
     input_props.append((tf.int32, [None]))  # post Text lengths.
     #input_props.append((tf.int32, [None])) # Speaker IDs.    #无
@@ -68,7 +74,7 @@ class CorefModel(object):
     self.enqueue_op = queue.enqueue(self.queue_input_tensors)  #入队操作
     self.input_tensors = queue.dequeue()   #出队操作
 
-    self.loss, self.post_topic_relation_score, self.pre_topic_relation_score, self.predictions= self.get_predictions_and_loss(*self.input_tensors)    #获得了top span antecedent以及embedding表示、score, loss
+    self.loss, self.post_topic_relation_score, self.pre_topic_relation_score, self.label, self.predict, self.predictions= self.get_predictions_and_loss(*self.input_tensors)    #获得了top span antecedent以及embedding表示、score, loss
     self.global_step = tf.Variable(0, name="global_step", trainable=False)
     self.reset_global_step = tf.assign(self.global_step, 0)
     learning_rate = tf.train.exponential_decay(self.config["learning_rate"], self.global_step,
@@ -88,9 +94,8 @@ class CorefModel(object):
       train_examples = [json.loads(jsonline) for jsonline in f.readlines()]   #载入训练数据
     def _enqueue_loop():
       while True:
-        # random.shuffle(train_examples)
+        random.shuffle(train_examples)
         for example in train_examples:
-          # print("输入：",example)
           tensorized_example = self.tensorize_example(example, is_training=True)
           feed_dict = dict(zip(self.queue_input_tensors, tensorized_example))
           session.run(self.enqueue_op, feed_dict=feed_dict)    # feed_dict={ self.queue_input_tensors : tensorized_example}，初始化self.queue_input_tensors
@@ -102,6 +107,7 @@ class CorefModel(object):
     # Don't try to restore unused variables from the TF-Hub ELMo module.
     vars_to_restore = [v for v in tf.global_variables() if "module/" not in v.name]
     saver = tf.train.Saver(vars_to_restore)
+    #dir = os.path.join(self.config["log_dir"], "cosine")
     checkpoint_path = os.path.join(self.config["log_dir"], "model.max.ckpt")
     print("Restoring from {}".format(checkpoint_path))
     session.run(tf.global_variables_initializer())
@@ -148,6 +154,7 @@ class CorefModel(object):
     pre_topic = example["pre_topic"]
     post_topic = example["post_topic"]
 
+
     pre_topic_start_index = [example["pre_topic_start_index"]]
     pre_topic_end_index = [example["pre_topic_end_index"]]
     post_topic_start_index = [example["post_topic_start_index"]]
@@ -175,23 +182,25 @@ class CorefModel(object):
 
     pre_context_word_emb = np.zeros([len(pre_sentences), pre_max_sentence_length, self.context_embeddings.size])    #self.context_embeddings.size针对不同的训练数据应该是不一样的，pre和post
     post_context_word_emb = np.zeros([len(post_sentences), post_max_sentence_length, self.context_embeddings.size])
-    #head_word_emb = np.zeros([len(sentences), max_sentence_length, self.head_embeddings.size])
-    #char_index = np.zeros([len(sentences), max_sentence_length, max_word_length])
+    pre_head_word_emb = np.zeros([len(pre_sentences), pre_max_sentence_length, self.head_embeddings.size])
+    post_head_word_emb = np.zeros([len(post_sentences), post_max_sentence_length, self.head_embeddings.size])
+    pre_char_index = np.zeros([len(pre_sentences), pre_max_sentence_length, pre_max_word_length])
+    post_char_index = np.zeros([len(post_sentences), post_max_sentence_length, post_max_word_length])
 
     for i, sentence in enumerate(pre_sentences):
       for j, word in enumerate(sentence):
         pre_tokens[i][j] = word
         pre_context_word_emb[i, j] = self.context_embeddings[word]
-        #head_word_emb[i, j] = self.head_embeddings[word]
-        #char_index[i, j, :len(word)] = [self.char_dict[c] for c in word]
+        pre_head_word_emb[i, j] = self.head_embeddings[word]
+        pre_char_index[i, j, :len(word)] = [self.char_dict[c] for c in word]
     pre_tokens = np.array(pre_tokens)
 
     for i, sentence in enumerate(post_sentences):
       for j, word in enumerate(sentence):
         post_tokens[i][j] = word
         post_context_word_emb[i, j] = self.context_embeddings[word]
-        #head_word_emb[i, j] = self.head_embeddings[word]
-        #char_index[i, j, :len(word)] = [self.char_dict[c] for c in word]
+        post_head_word_emb[i, j] = self.head_embeddings[word]
+        post_char_index[i, j, :len(word)] = [self.char_dict[c] for c in word]
     post_tokens = np.array(post_tokens)
 
     #speaker_dict = { s:i for i,s in enumerate(set(speakers)) }
@@ -216,14 +225,15 @@ class CorefModel(object):
 
 
     #example_tensors = (tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, speaker_ids, genre, is_training, gold_starts, gold_ends, cluster_ids)
-    example_tensors = (pre_topic_start_index, pre_topic_end_index, post_topic_start_index, post_topic_end_index, pre_tokens, post_tokens, pre_context_word_emb, post_context_word_emb, pre_lm_emb, post_lm_emb, pre_text_len, post_text_len, is_training, label)
-
+    example_tensors = (pre_topic, post_topic, pre_topic_start_index, pre_topic_end_index, post_topic_start_index, post_topic_end_index, pre_tokens, post_tokens, pre_context_word_emb, post_context_word_emb, pre_head_word_emb, post_head_word_emb, pre_lm_emb, post_lm_emb, pre_char_index, post_char_index, pre_text_len, post_text_len, is_training, label)
+    # pre_topic = tf.Print(pre_topic, [pre_topic], "pre_topic")
+    # post_topic = tf.Print(post_topic, [post_topic], "post_topic")
     if is_training and len(pre_sentences) > self.config["max_training_sentences"] and len(post_sentences) > self.config["max_training_sentences"]:
       return self.truncate_example(*example_tensors)
     else:
       return example_tensors
 
-  def truncate_example(self, pre_topic_start_index, pre_topic_end_index, post_topic_start_index, post_topic_end_index, pre_tokens, post_tokens, pre_context_word_emb, post_context_word_emb,  pre_lm_emb, post_lm_emb, pre_text_len, post_text_len, is_training, label):
+  def truncate_example(self, pre_topic, post_topic, pre_topic_start_index, pre_topic_end_index, post_topic_start_index, post_topic_end_index, pre_tokens, post_tokens, pre_context_word_emb, post_context_word_emb,  pre_head_word_emb, post_head_word_emb, pre_lm_emb, post_lm_emb, pre_char_index, post_char_index, pre_text_len, post_text_len, is_training, label):
     max_training_sentences = self.config["max_training_sentences"]
     pre_num_sentences = pre_context_word_emb.shape[0]
     post_num_sentences = post_context_word_emb.shape[0]
@@ -236,7 +246,9 @@ class CorefModel(object):
     pre_num_words = pre_text_len[pre_sentence_offset:pre_sentence_offset + max_training_sentences].sum()
     pre_tokens = pre_tokens[pre_sentence_offset:pre_sentence_offset + max_training_sentences, :]
     pre_context_word_emb = pre_context_word_emb[pre_sentence_offset:pre_sentence_offset + max_training_sentences, :, :]
+    pre_head_word_emb = pre_head_word_emb[pre_sentence_offset: pre_sentence_offset + max_training_sentences, :, :]
     pre_lm_emb = pre_lm_emb[pre_sentence_offset:pre_sentence_offset + max_training_sentences, :, :, :]
+    pre_char_index = pre_char_index[pre_sentence_offset:pre_sentence_offset + max_training_sentences, :, :]
     pre_text_len = pre_text_len[pre_sentence_offset:pre_sentence_offset + max_training_sentences]
 
     post_sentence_offset = random.randint(0, post_num_sentences - max_training_sentences)
@@ -244,10 +256,12 @@ class CorefModel(object):
     post_num_words = post_text_len[post_sentence_offset:post_sentence_offset + max_training_sentences].sum()
     post_tokens = post_tokens[post_sentence_offset:post_sentence_offset + max_training_sentences, :]
     post_context_word_emb = post_context_word_emb[post_sentence_offset:post_sentence_offset + max_training_sentences, :, :]
+    post_head_word_emb = post_head_word_emb[post_sentence_offset: post_sentence_offset + max_training_sentences, :, :]
     post_lm_emb = post_lm_emb[post_sentence_offset:post_sentence_offset + max_training_sentences, :, :, :]
+    post_char_index = post_char_index[post_sentence_offset: post_sentence_offset + max_training_sentences, :, :]
     post_text_len = post_text_len[post_sentence_offset:post_sentence_offset + max_training_sentences]
 
-    return pre_topic_start_index, pre_topic_end_index, post_topic_start_index, post_topic_end_index, pre_tokens, post_tokens, pre_context_word_emb, post_context_word_emb, pre_lm_emb, post_lm_emb, pre_text_len, post_text_len, is_training, label
+    return pre_topic, post_topic, pre_topic_start_index, pre_topic_end_index, post_topic_start_index, post_topic_end_index, pre_tokens, post_tokens, pre_context_word_emb, post_context_word_emb, pre_head_word_emb, post_head_word_emb, pre_lm_emb, post_lm_emb, pre_char_index, post_char_index, pre_text_len, post_text_len, is_training, label
 
   def get_candidate_labels(self, candidate_starts, candidate_ends, labeled_starts, labeled_ends, labels):
     same_start = tf.equal(tf.expand_dims(labeled_starts, 1), tf.expand_dims(candidate_starts, 0)) # [num_labeled, num_candidates]
@@ -272,7 +286,7 @@ class CorefModel(object):
     antecedents_mask = antecedent_offsets >= 0  # [k, k]   此处修改为大于等于0，不知道有作用没
     fast_antecedent_scores = tf.expand_dims(top_span_mention_scores, 1) + tf.expand_dims(top_span_mention_scores, 0) # [k, k]
     fast_antecedent_scores = tf.debugging.check_numerics(fast_antecedent_scores, "fast antecedent scores 1")
-    fast_antecedent_scores += tf.log(tf.clip_by_value(tf.to_float(antecedents_mask), 1e-10, 1.0)) # [k, k]    该步的作用？？？
+    fast_antecedent_scores += tf.log(tf.clip_by_value(tf.to_float(antecedents_mask), 1e-10, 1.0)) # [k, k]
     fast_antecedent_scores = tf.debugging.check_numerics(fast_antecedent_scores, "fast antecedent scores 2")
     fast_antecedent_scores += self.get_fast_antecedent_scores(top_span_emb) # [k, k]
 
@@ -293,13 +307,15 @@ class CorefModel(object):
     top_fast_antecedent_scores += tf.log(tf.to_float(top_antecedents_mask)) # [k, c]
     return top_antecedents, top_antecedents_mask, top_fast_antecedent_scores, top_antecedent_offsets
 
-  def get_predictions_and_loss(self, pre_topic_start_index, pre_topic_end_index, post_topic_start_index, post_topic_end_index, pre_tokens, post_tokens, pre_context_word_emb, post_context_word_emb, pre_lm_emb, post_lm_emb, pre_text_len, post_text_len, is_training, label):
+  def get_predictions_and_loss(self, pre_topic_word, post_topic_word, pre_topic_start_index, pre_topic_end_index, post_topic_start_index, post_topic_end_index, pre_tokens, post_tokens, pre_context_word_emb, post_context_word_emb, pre_head_word_emb, post_head_word_emb, pre_lm_emb, post_lm_emb, pre_char_index, post_char_index, pre_text_len, post_text_len, is_training, label):
     print("context word emb: ", pre_context_word_emb.get_shape())
     print("lm emb: ", pre_lm_emb.get_shape())
+    pre_topic_word = tf.Print(pre_topic_word, [pre_topic_word], "pre topic")
+    post_topic_word = tf.Print(post_topic_word, [post_topic_word], "post topic")
     with tf.variable_scope("pre_topic"):
-      pre_topic_emb, pre_top_span_emb, pre_top_span_mention_scores, pre_top_antecedent_emb, pre_top_antecedent_scores = self.get_predictions(pre_topic_start_index, pre_topic_end_index, pre_tokens, pre_context_word_emb, pre_lm_emb, pre_text_len, is_training)
+      pre_topic_emb, pre_top_span_emb, pre_top_span_mention_scores, pre_top_antecedent_emb, pre_top_antecedent_scores = self.get_predictions(pre_topic_start_index, pre_topic_end_index, pre_tokens, pre_context_word_emb, pre_head_word_emb, pre_lm_emb, pre_char_index, pre_text_len, is_training)
     with tf.variable_scope("post_topic"):
-      post_topic_emb, post_top_span_emb, post_top_span_mention_scores, post_top_antecedent_emb, post_top_antecedent_scores = self.get_predictions(post_topic_start_index, post_topic_end_index, post_tokens, post_context_word_emb, post_lm_emb, post_text_len, is_training)
+      post_topic_emb, post_top_span_emb, post_top_span_mention_scores, post_top_antecedent_emb, post_top_antecedent_scores = self.get_predictions(post_topic_start_index, post_topic_end_index, post_tokens, post_context_word_emb, post_head_word_emb, post_lm_emb, post_char_index, post_text_len, is_training)
 
 
     '''
@@ -320,7 +336,7 @@ class CorefModel(object):
     # post_topic_emb = tf.squeeze(post_topic_emb)
 
     #span_emb = tf.concat(0,[pre_top_span_emb,post_top_span_emb])  #[2k, emb]
-    span_emb_set = set()
+    # span_emb_set = set()
 
     pre_k = util.shape(pre_top_span_emb, 0)
     # pre_k = pre_top_span_emb.get_shape()[0]
@@ -329,9 +345,9 @@ class CorefModel(object):
     #pre_c = pre_top_antecedent_emb.get_shape().as_list()[1]
     # pre_top_span_emb = tf.expand_dims(tf.tile(pre_top_span_emb, [1, pre_c]), 1)   #将emb复制c次后，增加一个维度，转变为[k,c,emb]的维度
     #pre_span_pair = [ [] * pre_c for _ in range(pre_k)]   #获得span对的embedding， pre_span_pair[i][j]的元素是span对的embedding表示，元组对的形式
-    pre_temp_top_span_emb = tf.tile(tf.expand_dims(pre_top_span_emb, 1), [1, pre_c, 1])
+    pre_temp_top_span_emb = tf.tile(tf.expand_dims(pre_top_span_emb, 1), [1, pre_c, 1])   # [k, c, emb]
     print("pre_top_span_emb: {}".format(pre_top_span_emb))
-    pre_span_pair = tf.stack([pre_temp_top_span_emb, pre_top_antecedent_emb], 2)
+    pre_span_pair = tf.stack([pre_temp_top_span_emb, pre_top_antecedent_emb], 2)   # [k, c, 2, emb]
 
     print("pre_span_pair: {}".format(pre_span_pair))
 
@@ -359,28 +375,28 @@ class CorefModel(object):
 
     # 给定topic，获得和span的余弦相似度值    pre_topic
     temp_pre_topic_emb = tf.tile(pre_topic_emb, [pre_k, 1])   #[pre_k, emb]
-    pre_topic_pre_span_cosin = self.topic_span_cosin(temp_pre_topic_emb, pre_top_span_emb, 1)   #[pre_k]
+    pre_topic_pre_span_cosin = self.topic_span_similarity(temp_pre_topic_emb, pre_top_span_emb, 1)   #[pre_k]
     temp_pre_topic_emb = tf.tile(pre_topic_emb, [post_k, 1])   # [post_k, emb]
-    pre_topic_post_span_cosin = self.topic_span_cosin(temp_pre_topic_emb, post_top_span_emb, 1)   #[post_k]
+    pre_topic_post_span_cosin = self.topic_span_similarity(temp_pre_topic_emb, post_top_span_emb, 1)   #[post_k]
 
     #给定topic，获得和antecedent的余弦相似度值    pre_topic
     temp_pre_topic_emb = tf.tile(tf.expand_dims(pre_topic_emb, 0), [pre_k, pre_c, 1])    # [pre_k, pre_c, emb]
-    pre_topic_pre_antecedent_cosin = self.topic_span_cosin(temp_pre_topic_emb, pre_top_antecedent_emb, 2)    # [pre_k, pre_c]
+    pre_topic_pre_antecedent_cosin = self.topic_span_similarity(temp_pre_topic_emb, pre_top_antecedent_emb, 2)    # [pre_k, pre_c]
     temp_pre_topic_emb = tf.tile(tf.expand_dims(pre_topic_emb, 0), [post_k, post_c, 1])    # [post_k, postc]
-    pre_topic_post_antecedent_cosin = self.topic_span_cosin(temp_pre_topic_emb, post_top_antecedent_emb, 2)   # [post_k, post_c]
+    pre_topic_post_antecedent_cosin = self.topic_span_similarity(temp_pre_topic_emb, post_top_antecedent_emb, 2)   # [post_k, post_c]
 
     # 给定topic，获得和span的余弦相似度值    post_topic
     temp_post_topic_emb = tf.tile(post_topic_emb, [pre_k, 1])  # [pre_k, emb]
-    post_topic_pre_span_cosin = self.topic_span_cosin(temp_post_topic_emb, pre_top_span_emb, 1)  # [pre_k]
+    post_topic_pre_span_cosin = self.topic_span_similarity(temp_post_topic_emb, pre_top_span_emb, 1)  # [pre_k]
     temp_post_topic_emb = tf.tile(post_topic_emb, [post_k, 1])  # [post_k, emb]
-    post_topic_post_span_cosin = self.topic_span_cosin(temp_post_topic_emb, post_top_span_emb, 1)  # [post_k]
+    post_topic_post_span_cosin = self.topic_span_similarity(temp_post_topic_emb, post_top_span_emb, 1)  # [post_k]
 
     # 给定topic，获得和antecedent的余弦相似度值    post_topic
     temp_post_topic_emb = tf.tile(tf.expand_dims(post_topic_emb, 0), [pre_k, pre_c, 1])  # [pre_k, pre_c, emb]
-    post_topic_pre_antecedent_cosin = self.topic_span_cosin(temp_post_topic_emb, pre_top_antecedent_emb,
+    post_topic_pre_antecedent_cosin = self.topic_span_similarity(temp_post_topic_emb, pre_top_antecedent_emb,
                                                            2)  # [pre_k, pre_c]
-    temp_post_topic_emb = tf.tile(tf.expand_dims(post_topic_emb, 0), [post_k, post_c, 1])  # [post_k, postc]
-    post_topic_post_antecedent_cosin = self.topic_span_cosin(temp_post_topic_emb,
+    temp_post_topic_emb = tf.tile(tf.expand_dims(post_topic_emb, 0), [post_k, post_c, 1])  # [post_k, post_c]
+    post_topic_post_antecedent_cosin = self.topic_span_similarity(temp_post_topic_emb,
                                                             post_top_antecedent_emb, 2)  # [post_k, post_c]
 
     # 统计两个主题分别作为先序词的得分
@@ -390,14 +406,25 @@ class CorefModel(object):
     # antecedent为后序词，即先后序关系指向antecedent ， 后学antecedent
 
 
+    # # pre_topic作为后序词    pre_antecedent
+    # pre_topic_relation_score += self.get_topic_relation_score(pre_topic_pre_antecedent_cosin, pre_top_antecedent_scores, post_topic_pre_span_cosin, pre_top_span_mention_scores, post_k, pre_k, pre_c)
+    # # pre topic作为后序词    post antecedent
+    # pre_topic_relation_score += self.get_topic_relation_score(pre_topic_post_antecedent_cosin, post_top_antecedent_scores, post_topic_pre_span_cosin, pre_k, post_k, post_c)
+    # # post topic作为后序词    pre antecedent
+    # post_topic_relation_score += self.get_topic_relation_score(post_topic_pre_antecedent_cosin, pre_top_antecedent_scores, pre_topic_post_span_cosin, post_k, pre_k, pre_c)
+    # # post topic作为后序词     post antecedent
+    # post_topic_relation_score += self.get_topic_relation_score(post_topic_post_antecedent_cosin, post_top_antecedent_scores, pre_topic_pre_span_cosin, pre_k, post_k, post_c)
+
+
     # pre_topic作为后序词    pre_antecedent
-    pre_topic_relation_score += self.get_topic_relation_score(pre_topic_pre_antecedent_cosin, pre_top_antecedent_scores, post_topic_post_span_cosin, post_k, pre_k, pre_c)
+    pre_topic_relation_score += self.get_topic_relation_score(pre_topic_pre_antecedent_cosin, pre_top_antecedent_scores, post_topic_pre_span_cosin, pre_top_span_mention_scores, pre_k, pre_c)
     # pre topic作为后序词    post antecedent
-    pre_topic_relation_score += self.get_topic_relation_score(pre_topic_post_antecedent_cosin, post_top_antecedent_scores, post_topic_pre_span_cosin, pre_k, post_k, post_c)
+    pre_topic_relation_score += self.get_topic_relation_score(pre_topic_post_antecedent_cosin, post_top_antecedent_scores, post_topic_post_span_cosin, post_top_span_mention_scores, post_k, post_c)
     # post topic作为后序词    pre antecedent
-    post_topic_relation_score += self.get_topic_relation_score(post_topic_pre_antecedent_cosin, pre_top_antecedent_scores, pre_topic_post_span_cosin, post_k, pre_k, pre_c)
+    post_topic_relation_score += self.get_topic_relation_score(post_topic_pre_antecedent_cosin, pre_top_antecedent_scores, pre_topic_pre_span_cosin, pre_top_span_mention_scores, pre_k, pre_c)
     # post topic作为后序词     post antecedent
-    post_topic_relation_score += self.get_topic_relation_score(post_topic_post_antecedent_cosin, post_top_antecedent_scores, pre_topic_pre_span_cosin, pre_k, post_k, post_c)
+    post_topic_relation_score += self.get_topic_relation_score(post_topic_post_antecedent_cosin, post_top_antecedent_scores, pre_topic_post_span_cosin, post_top_span_mention_scores, post_k, post_c)
+
 
     # pre_topic_pre_relation = tf.multiply(pre_topic_pre_antecedent_cosin,
     #                                       pre_top_antecedent_scores)  # [pre_k, pre_c]
@@ -448,57 +475,110 @@ class CorefModel(object):
 
     # post_topic_relation_score = tf.sigmoid(post_topic_relation_score)
     # pre_topic_relation_score = tf.sigmoid(pre_topic_relation_score)
-    post_score = post_topic_relation_score - pre_topic_relation_score     #post topic作为后序词
-    pre_score = pre_topic_relation_score - post_topic_relation_score
+
+    # pre_result = pre_topic_relation_score - post_topic_relation_score
+    # post_result = post_topic_relation_score - pre_topic_relation_score
+    # logits = tf.convert_to_tensor([pre_result, post_result])
+    # loss= self.softmax_cross_entropy_with_logits(label, logits)
+    # final_score = tf.argmax(tf.nn.softmax(logits))
 
     final_score = post_topic_relation_score - pre_topic_relation_score
 
     final_score = tf.sigmoid(final_score)
+    # final_score = final_score/post_topic_relation_score
 
-    # if label != 1:
-
-    #   label = 0
-
-    #loss = self.corss_entropy_loss(tf.cast(label, tf.float32), tf.cast(final_score, tf.float32))
-    #loss = self.corss_entropy_loss(label, final_score)
     loss = self.weighted_cross_entorpy_with_logits(label, final_score)
+    # final_score = tf.nn.softmax(tf.convert_to_tensor([post_result, pre_result]))[0]
 
+    return loss,post_topic_relation_score, pre_topic_relation_score, label, final_score, [pre_topic_emb, post_topic_emb, pre_top_span_emb, post_top_span_emb, pre_top_span_mention_scores, post_top_span_mention_scores, pre_top_antecedent_emb, post_top_antecedent_emb, pre_top_antecedent_scores, post_top_antecedent_scores, final_score]
 
+  # def get_topic_relation_score(self, antecedent_cosin, antecedent_scores, span_cosin, span_score, dim1, dim2, dim3):
+  #
+  #   '''
+  #
+  #   :param antecedent_cosin:    [dim2, dim3]
+  #   :param antecedent_scores:   [dim2, dim3]
+  #   :param span_cosin:   [dim1]
+  #   :param span_score:  [dim1]
+  #   :param dim1:
+  #   :param dim2:
+  #   :param dim3:
+  #   :return:
+  #   '''
+  #
+  #   metric = self.config["related_metric"]
+  #
+  #   # 例子，pre_topic作为后序词    和pre_antecedent相关
+  #   pre_topic_pre_relation = tf.multiply(antecedent_cosin,
+  #                                        antecedent_scores)  # [pre_k, pre_c]   [dim2, dim3]
+  #   pre_topic_pre_relation = tf.tile(tf.expand_dims(pre_topic_pre_relation, 0),
+  #                                    [dim1, 1, 1])  # [post_k, pre_k, pre_c]   [dim1, dim2, dim3]
+  #   temp_post_topic_post_span_cosin = tf.tile(tf.expand_dims(tf.expand_dims(span_cosin, 1), 1),
+  #                                             [1, dim2, dim3])  # [post_k, pre_k, pre_c]   [dim1, dim2, dim3]
+  #   temp_pre_topic_pre_antecedent_cosin = tf.tile(tf.expand_dims(antecedent_cosin, 0),
+  #                                                 [dim1, 1, 1])  # [post_k, pre_k, pre_c]   [dim1, dim2, dim3]
+  #   pre_topic_pre_mask = tf.logical_and(
+  #     tf.greater_equal(temp_post_topic_post_span_cosin, tf.fill([dim1, dim2, dim3], metric)),
+  #     tf.greater_equal(temp_pre_topic_pre_antecedent_cosin, tf.fill([dim1, dim2, dim3], metric)))
+  #   pre_topic_as_antecedent = tf.boolean_mask(pre_topic_pre_relation, pre_topic_pre_mask)
+  #   return tf.reduce_sum(pre_topic_as_antecedent)
+  #   #return tf.reduce_mean(pre_topic_as_antecedent)
 
-
-    return loss,post_topic_relation_score, pre_topic_relation_score, [pre_topic_emb, post_topic_emb, pre_top_span_emb, post_top_span_emb, pre_top_span_mention_scores, post_top_span_mention_scores, pre_top_antecedent_emb, post_top_antecedent_emb, pre_top_antecedent_scores, post_top_antecedent_scores, final_score]
-
-  def get_topic_relation_score(self, antecedent_cosin, antecedent_scores, span_cosin, dim1, dim2, dim3):
+  def get_topic_relation_score(self, antecedent_cosin, antecedent_scores, span_cosin, span_score, dim2, dim3):
 
     '''
 
     :param antecedent_cosin:    [dim2, dim3]
     :param antecedent_scores:   [dim2, dim3]
-    :param span_cosin:   [dim1]
-    :param dim1:
+    :param span_cosin:   [dim2]
+    :param span_score:  [dim2]
     :param dim2:
     :param dim3:
     :return:
     '''
 
-    metric = 0.0
+    metric = self.config["related_metric"]
 
     # 例子，pre_topic作为后序词    和pre_antecedent相关
-    pre_topic_pre_relation = tf.multiply(antecedent_cosin,
+    pre_topic_pre_antecedent_relation = tf.multiply(antecedent_cosin,
                                          antecedent_scores)  # [pre_k, pre_c]   [dim2, dim3]
-    pre_topic_pre_relation = tf.tile(tf.expand_dims(pre_topic_pre_relation, 0),
-                                     [dim1, 1, 1])  # [post_k, pre_k, pre_c]   [dim1, dim2, dim3]
-    temp_post_topic_post_span_cosin = tf.tile(tf.expand_dims(tf.expand_dims(span_cosin, 1), 1),
-                                              [1, dim2, dim3])  # [post_k, pre_k, pre_c]   [dim1, dim2, dim3]
-    temp_pre_topic_pre_antecedent_cosin = tf.tile(tf.expand_dims(antecedent_cosin, 0),
-                                                  [dim1, 1, 1])  # [post_k, pre_k, pre_c]   [dim1, dim2, dim3]
-    pre_topic_pre_mask = tf.logical_and(
-      tf.greater_equal(temp_post_topic_post_span_cosin, tf.fill([dim1, dim2, dim3], metric)),
-      tf.greater_equal(temp_pre_topic_pre_antecedent_cosin, tf.fill([dim1, dim2, dim3], metric)))
-    pre_topic_as_antecedent = tf.boolean_mask(pre_topic_pre_relation, pre_topic_pre_mask)
-    return tf.reduce_sum(pre_topic_as_antecedent)
+    post_topic_pre_span_relation = tf.multiply(span_cosin, span_score)   # [pre_k]
+    post_topic_pre_span_relation = tf.tile(tf.expand_dims(post_topic_pre_span_relation, 1),
+                                              [1, dim3])  # [pre_k, pre_c]   [dim2, dim3]
+    span_cosin_expand = tf.tile(tf.expand_dims(span_cosin, 1), [1, dim3])  # [dim2, dim3]
 
-  def topic_span_cosin(self, topic_emb, span_emb, dim):
+
+    pre_topic_pre_mask = tf.logical_and(
+      tf.greater_equal(pre_topic_pre_antecedent_relation, tf.fill([dim2, dim3], metric)),
+      tf.greater_equal(post_topic_pre_span_relation, tf.fill([dim2, dim3], metric)))
+    # cosin_mask = tf.logical_and(
+    #     tf.greater_equal(antecedent_cosin, tf.fill([dim2, dim3], 0.1)),
+    #     tf.greater_equal(span_cosin_expand, tf.fill([dim2, dim3], 0.1))
+    # )
+    # pre_topic_pre_mask = tf.logical_and(pre_topic_pre_mask, cosin_mask)
+    pre_topic_as_antecedent = tf.boolean_mask(pre_topic_pre_antecedent_relation, pre_topic_pre_mask)
+    return tf.reduce_sum(pre_topic_as_antecedent)
+    # return tf.reduce_mean(pre_topic_as_antecedent)
+
+    # 修改部分
+    # flatten_mask = tf.reshape(pre_topic_pre_mask, [-1])
+    # pre_topic_as_antecedent = tf.boolean_mask(tf.reshape(pre_topic_pre_antecedent_relation, [-1]), flatten_mask)
+    # top_k_result = tf.to_int32(tf.ceil(tf.to_float(tf.size(pre_topic_as_antecedent)) * self.config["top_result_ratio"]))  # 确定top k
+    # print("pre topic as antecedent shape: ", pre_topic_as_antecedent.get_shape())
+    # print("top k result: ", top_k_result)
+    # result = tf.cond(tf.greater(top_k_result, 0), lambda : tf.nn.top_k(pre_topic_as_antecedent, top_k_result)[0], lambda : pre_topic_as_antecedent)
+
+    # result = tf.nn.top_k(pre_topic_as_antecedent, top_k_result)
+    # result = result[0]
+
+    # return tf.reduce_sum(result)
+
+  def topic_span_similarity(self, topic_emb, span_emb, dim):
+      similarity = self.topic_span_cosin(topic_emb, span_emb, dim)
+      # similarity = self.topic_span_manhattan(topic_emb, span_emb, dim)
+      return similarity
+
+  def topic_span_cosin(self, topic_emb, span_emb, dim):#余弦相似度
     #求模
     topic_norm = tf.sqrt(tf.reduce_sum(tf.square(topic_emb), axis=dim))
     span_norm = tf.sqrt(tf.reduce_sum(tf.square(span_emb), axis=dim))
@@ -507,6 +587,14 @@ class CorefModel(object):
     cosin = tf.divide(topic_span, tf.multiply(topic_norm, span_norm))
     return cosin
 
+  def topic_span_euclidean(self, topic_emb, span_emb, dim):#欧拉距离
+      euclidean = tf.sqrt(tf.reduce_sum(tf.square(topic_emb - span_emb), dim))
+      return 1/(1+euclidean)
+
+  def topic_span_manhattan(self, topic_emb, span_emb, dim):#曼哈顿距离
+      manhattan = tf.reduce_sum(tf.abs(tf.add(topic_emb, tf.negative(span_emb))), dim)
+      return manhattan
+
   def corss_entropy_loss(self, label, score):
       loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=label, logits=score)
       return tf.reduce_mean(loss)
@@ -514,15 +602,22 @@ class CorefModel(object):
   def weighted_cross_entorpy_with_logits(self, label, score):
       weight = 2.0
       loss = tf.nn.weighted_cross_entropy_with_logits(logits=score, targets=label, pos_weight=weight)
-      loss += tf.add_n(tf.get_collection('losses'))
-      return tf.reduce_mean(loss)
+      # loss += tf.add_n(tf.get_collection('losses'))
 
-  def softmax_cross_entropy_with_logits(self, logits, label):
-      if label == 1.0:
-          label = tf.convert_to_tensor([0, 1], dtype=tf.int32)
+      #L2正则化损失
+      tv = tf.trainable_variables()   #得到所有可以训练的参数，即所有trainable=True 的tf.Variable/tf.get_variable
+      regularization_cost = self.config['lambda'] * tf.reduce_sum([tf.nn.l2_loss(v) for v in tv])  # 0.001是lambda超参数
+      loss = loss + regularization_cost
+      return tf.reduce_mean(loss)
+      # return loss
+
+  def softmax_cross_entropy_with_logits(self, label, logits):
+      if label - 1 == 0:
+          labels = tf.convert_to_tensor([0, 1.0], dtype=tf.float32)
       else:
-          label = tf.convert_to_tensor([1, 0], tf.int32)
-      loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=label)
+          labels = tf.convert_to_tensor([1.0, 0], tf.float32)
+      loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=tf.argmax(labels, 0))
+
       return tf.reduce_mean(loss)
 
   def cosin_score(self, emb_1, emb_2):
@@ -543,14 +638,7 @@ class CorefModel(object):
     return related_span
 
 
-  def get_predictions(self, topic_start_index, topic_end_index, tokens, context_word_emb, lm_emb, text_len, is_training):    #contex embedding和lm embedding不一样
-
-      # topic_start_index = tf.Print(topic_start_index, [topic_start_index], "topic start index value")
-      # tokens = tf.Print(tokens, [tokens], "tokens value")
-      # context_word_emb = tf.Print(context_word_emb, [context_word_emb], "context word embedding value")
-      # lm_emb = tf.Print(lm_emb, [lm_emb], "lm embedding value")
-      # text_len = tf.Print(text_len, [text_len], "text len value")
-
+  def get_predictions(self, topic_start_index, topic_end_index, tokens, context_word_emb, head_word_emb, lm_emb, char_index, text_len, is_training):    #contex embedding和lm embedding不一样
 
       self.dropout = self.get_dropout(self.config["dropout_rate"], is_training)
       self.lexical_dropout = self.get_dropout(self.config["lexical_dropout_rate"], is_training)
@@ -560,17 +648,17 @@ class CorefModel(object):
       max_sentence_length = tf.shape(context_word_emb)[1]
 
       context_emb_list = [context_word_emb]
+      head_emb_list = [head_word_emb]
 
 
-      '''
-          if self.config["char_embedding_size"] > 0:
+      if self.config["char_embedding_size"] > 0:
         char_emb = tf.gather(tf.get_variable("char_embeddings", [len(self.char_dict), self.config["char_embedding_size"]]), char_index) # [num_sentences, max_sentence_length, max_word_length, emb]
         flattened_char_emb = tf.reshape(char_emb, [num_sentences * max_sentence_length, util.shape(char_emb, 2), util.shape(char_emb, 3)]) # [num_sentences * max_sentence_length, max_word_length, emb]
         flattened_aggregated_char_emb = util.cnn(flattened_char_emb, self.config["filter_widths"], self.config["filter_size"]) # [num_sentences * max_sentence_length, emb]
         aggregated_char_emb = tf.reshape(flattened_aggregated_char_emb, [num_sentences, max_sentence_length, util.shape(flattened_aggregated_char_emb, 1)]) # [num_sentences, max_sentence_length, emb]
         context_emb_list.append(aggregated_char_emb)
         head_emb_list.append(aggregated_char_emb)   #获得head_emb_list
-      '''
+
 
       if not self.lm_file:
         elmo_module = hub.Module("/home/makexin/makexin/elmo/modle/2")
@@ -584,11 +672,13 @@ class CorefModel(object):
       print("lm emb: ", lm_emb.get_shape())
       lm_emb_size = util.shape(lm_emb, 2)
       lm_num_layers = util.shape(lm_emb, 3)
-      with tf.variable_scope("lm_aggregation"):
-        self.lm_weights = tf.nn.softmax(
-          tf.get_variable("lm_scores", [lm_num_layers], initializer=tf.constant_initializer(0.0)))
-        tf.add_to_collection('losses', tf.contrib.layers.l2_regularizer(self.config['lambda'])(self.lm_weights))
-        self.lm_scaling = tf.get_variable("lm_scaling", [], initializer=tf.constant_initializer(1.0))
+      with tf.name_scope("lm_aggregation"):
+        with tf.variable_scope("lm_aggregation"):
+            self.lm_weights = tf.nn.softmax(
+                tf.get_variable("lm_scores", [lm_num_layers], initializer=tf.constant_initializer(0.0)))
+            tf.add_to_collection('losses', tf.contrib.layers.l2_regularizer(self.config['lambda'])(self.lm_weights))
+            self.lm_scaling = tf.get_variable("lm_scaling", [], initializer=tf.constant_initializer(1.0))
+            tf.summary.histogram("lm_weights", self.lm_weights)
       flattened_lm_emb = tf.reshape(lm_emb, [num_sentences * max_sentence_length * lm_emb_size, lm_num_layers])
       flattened_aggregated_lm_emb = tf.matmul(flattened_lm_emb, tf.expand_dims(self.lm_weights,
                                                                                1))  # [num_sentences * max_sentence_length * emb, 1]
@@ -597,23 +687,18 @@ class CorefModel(object):
       context_emb_list.append(
         aggregated_lm_emb)  # 获得context_emb_list      context_emb_list合并了context embedding 和 lm embedding
 
-      context_emb = tf.concat(context_emb_list, 2)  # [num_sentences, max_sentence_length, emb]  两个矩阵拼接
-      # head_emb = tf.concat(head_emb_list, 2) # [num_sentences, max_sentence_length, emb]
+      context_emb = tf.concat(context_emb_list, 2, name="context_emb")  # [num_sentences, max_sentence_length, emb]  两个矩阵拼接
+      head_emb = tf.concat(head_emb_list, 2, name="head_emb") # [num_sentences, max_sentence_length, emb]
       context_emb = tf.nn.dropout(context_emb,
-                                  self.lexical_dropout)  # [num_sentences, max_sentence_length, emb]    进行dropout
-      #context_emb = tf.debugging.check_numerics(context_emb, "check context_emb")
-      #context_emb = tf.Print(context_emb, [context_emb], "context embedding")
-
-
-      # head_emb = tf.nn.dropout(head_emb, self.lexical_dropout) # [num_sentences, max_sentence_length, emb]
+                                  self.lexical_dropout, name="context_emb_dropout")  # [num_sentences, max_sentence_length, emb]    进行dropout
+      head_emb = tf.nn.dropout(head_emb, self.lexical_dropout, name="head_emb_dropout") # [num_sentences, max_sentence_length, emb]
 
       text_len_mask = tf.sequence_mask(text_len, maxlen=max_sentence_length)  # [num_sentence, max_sentence_length]
 
-      context_outputs = self.lstm_contextualize(context_emb, text_len, text_len_mask,
+      with tf.name_scope("context_outputs"):
+        context_outputs = self.lstm_contextualize(context_emb, text_len, text_len_mask,
                                                 "topic")  # [num_words, emb]   经过一个双向lstm的输出    LSTM输出
 
-      #context_outputs = tf.Print(context_outputs, [context_outputs], "context outputs")
-      #context_outputs = tf.debugging.check_numerics(context_outputs, " check numbers context_outputs")
 
       num_words = util.shape(context_outputs, 0)
       print("context outputs: ", context_outputs.get_shape())
@@ -624,7 +709,7 @@ class CorefModel(object):
       sentence_indices = tf.tile(tf.expand_dims(tf.range(num_sentences), 1),
                                  [1, max_sentence_length])  # [num_sentences, max_sentence_length]
       flattened_sentence_indices = self.flatten_emb_by_sentence(sentence_indices, text_len_mask)  # [num_words]
-      # flattened_head_emb = self.flatten_emb_by_sentence(head_emb, text_len_mask) # [num_words]
+      flattened_head_emb = self.flatten_emb_by_sentence(head_emb, text_len_mask) # [num_words]
 
       # candidate start and end 指的是词的起始和结尾   划分span
       candidate_starts = tf.tile(tf.expand_dims(tf.range(num_words), 1),
@@ -648,7 +733,7 @@ class CorefModel(object):
       topic_end = topic_end_index
       print("topic start: {}, topic end {}".format(topic_start, topic_end))
       # 获得topic的embedding
-      topic_emb = self.get_span_emb(context_outputs, topic_start, topic_end)  # [1,emb]
+      topic_emb = self.get_span_emb(flattened_head_emb, context_outputs, topic_start, topic_end, "topic_emb")  # [1,emb]
       # topic_emb = tf.Print(topic_emb, [topic_emb], "topic emb , after get span emb")
       print("topic emb: ", topic_emb.get_shape())
 
@@ -657,7 +742,7 @@ class CorefModel(object):
       # candidate_cluster_ids = self.get_candidate_labels(candidate_starts, candidate_ends, gold_starts, gold_ends, cluster_ids) # [num_candidates]
 
       # 获得span的embedding, 给出span的开始和结束索引
-      candidate_span_emb = self.get_span_emb(context_outputs, candidate_starts, candidate_ends)  # [num_candidates, emb]
+      candidate_span_emb = self.get_span_emb(flattened_head_emb, context_outputs, candidate_starts, candidate_ends, "candidate_span_emb")  # [num_candidates, emb]
       print("candidate span emb : ", candidate_span_emb.get_shape())
       candidate_mention_scores = self.get_mention_scores(candidate_span_emb, "topic")  # [k, 1]   #通过一个前馈神经网络获得值
       candidate_mention_scores = tf.squeeze(candidate_mention_scores, 1)  # [k]
@@ -708,7 +793,9 @@ class CorefModel(object):
                                                                                                 top_antecedent_offsets)
           #top_antecedent_scores = tf.debugging.check_numerics(top_antecedent_scores, "top antecedent_scores 2")
           top_antecedent_weights = tf.nn.softmax(tf.concat([dummy_scores, top_antecedent_scores], 1))  # [k, c + 1]
-          tf.add_to_collection('losses', tf.contrib.layers.l2_regularizer(self.config['lambda'])(top_antecedent_weights))
+          tf.summary.histogram("top_antecedent_weights", top_antecedent_weights)
+          tf.add_to_collection('losses',
+                               tf.contrib.layers.l2_regularizer(self.config['lambda'])(top_antecedent_weights))
           top_antecedent_emb = tf.concat([tf.expand_dims(top_span_emb, 1), top_antecedent_emb], 1)  # [k, c + 1, emb]
           attended_span_emb = tf.reduce_sum(tf.expand_dims(top_antecedent_weights, 2) * top_antecedent_emb,
                                             1)  # [k, emb]
@@ -719,7 +806,7 @@ class CorefModel(object):
 
       top_antecedent_scores = tf.concat([dummy_scores, top_antecedent_scores], 1)  # [k, c + 1]
       '''
-
+      
       top_antecedent_cluster_ids = tf.gather(top_span_cluster_ids, top_antecedents) # [k, c]   top antecedent对应的cluster id
       top_antecedent_cluster_ids += tf.to_int32(tf.log(tf.to_float(top_antecedents_mask))) # [k, c]
       same_cluster_indicator = tf.equal(top_antecedent_cluster_ids, tf.expand_dims(top_span_cluster_ids, 1)) # [k, c]
@@ -741,167 +828,8 @@ class CorefModel(object):
 
       return topic_emb, top_span_emb, top_span_mention_scores, top_antecedent_emb, top_antecedent_scores
 
-  def get_post_predictions(self, topic_start_index, topic_end_index, tokens, context_word_emb, lm_emb, text_len, is_training):  # contex embedding和lm embedding不一样
-    with tf.variable_scope("post_topic"):
-      self.dropout = self.get_dropout(self.config["dropout_rate"], is_training)
-      self.lexical_dropout = self.get_dropout(self.config["lexical_dropout_rate"], is_training)
-      self.lstm_dropout = self.get_dropout(self.config["lstm_dropout_rate"], is_training)
 
-      num_sentences = tf.shape(context_word_emb)[0]
-      max_sentence_length = tf.shape(context_word_emb)[1]
-
-      context_emb_list = [context_word_emb]
-
-      '''
-          if self.config["char_embedding_size"] > 0:
-        char_emb = tf.gather(tf.get_variable("char_embeddings", [len(self.char_dict), self.config["char_embedding_size"]]), char_index) # [num_sentences, max_sentence_length, max_word_length, emb]
-        flattened_char_emb = tf.reshape(char_emb, [num_sentences * max_sentence_length, util.shape(char_emb, 2), util.shape(char_emb, 3)]) # [num_sentences * max_sentence_length, max_word_length, emb]
-        flattened_aggregated_char_emb = util.cnn(flattened_char_emb, self.config["filter_widths"], self.config["filter_size"]) # [num_sentences * max_sentence_length, emb]
-        aggregated_char_emb = tf.reshape(flattened_aggregated_char_emb, [num_sentences, max_sentence_length, util.shape(flattened_aggregated_char_emb, 1)]) # [num_sentences, max_sentence_length, emb]
-        context_emb_list.append(aggregated_char_emb)
-        head_emb_list.append(aggregated_char_emb)   #获得head_emb_list
-      '''
-
-      if not self.lm_file:
-        elmo_module = hub.Module("/home/makexin/makexin/elmo/modle/2")
-        lm_embeddings = elmo_module(
-          inputs={"tokens": tokens, "sequence_len": text_len},
-          signature="tokens", as_dict=True)
-        word_emb = lm_embeddings["word_emb"]  # [num_sentences, max_sentence_length, 512]
-        lm_emb = tf.stack([tf.concat([word_emb, word_emb], -1),
-                           lm_embeddings["lstm_outputs1"],
-                           lm_embeddings["lstm_outputs2"]], -1)  # [num_sentences, max_sentence_length, 1024, 3]
-      lm_emb_size = util.shape(lm_emb, 2)
-      lm_num_layers = util.shape(lm_emb, 3)
-      with tf.variable_scope("post_lm_aggregation"):
-        self.lm_weights = tf.nn.softmax(
-          tf.get_variable("post_lm_scores", [lm_num_layers], initializer=tf.constant_initializer(0.0)))
-        self.lm_scaling = tf.get_variable("post_lm_scaling", [], initializer=tf.constant_initializer(1.0))
-      flattened_lm_emb = tf.reshape(lm_emb, [num_sentences * max_sentence_length * lm_emb_size, lm_num_layers])
-      flattened_aggregated_lm_emb = tf.matmul(flattened_lm_emb, tf.expand_dims(self.lm_weights,
-                                                                               1))  # [num_sentences * max_sentence_length * emb, 1]
-      aggregated_lm_emb = tf.reshape(flattened_aggregated_lm_emb, [num_sentences, max_sentence_length, lm_emb_size])
-      aggregated_lm_emb *= self.lm_scaling
-      context_emb_list.append(
-        aggregated_lm_emb)  # 获得context_emb_list      context_emb_list合并了context embedding 和 lm embedding
-
-      context_emb = tf.concat(context_emb_list, 2)  # [num_sentences, max_sentence_length, emb]  两个矩阵拼接
-      # head_emb = tf.concat(head_emb_list, 2) # [num_sentences, max_sentence_length, emb]
-      context_emb = tf.nn.dropout(context_emb,
-                                  self.lexical_dropout)  # [num_sentences, max_sentence_length, emb]    进行dropout
-      # head_emb = tf.nn.dropout(head_emb, self.lexical_dropout) # [num_sentences, max_sentence_length, emb]
-
-      text_len_mask = tf.sequence_mask(text_len, maxlen=max_sentence_length)  # [num_sentence, max_sentence_length]
-
-      context_outputs = self.lstm_contextualize(context_emb, text_len,
-                                                text_len_mask,
-                                                "post-topic")  # [num_words, emb]   经过一个双向lstm的输出    LSTM输出
-      num_words = util.shape(context_outputs, 0)
-
-      # genre_emb = tf.gather(tf.get_variable("genre_embeddings", [len(self.genres), self.config["feature_size"]]), genre) # [emb]
-
-      sentence_indices = tf.tile(tf.expand_dims(tf.range(num_sentences), 1),
-                                 [1, max_sentence_length])  # [num_sentences, max_sentence_length]
-      flattened_sentence_indices = self.flatten_emb_by_sentence(sentence_indices, text_len_mask)  # [num_words]
-      # flattened_head_emb = self.flatten_emb_by_sentence(head_emb, text_len_mask) # [num_words]
-
-      # candidate start and end 指的是词的起始和结尾   划分span
-      candidate_starts = tf.tile(tf.expand_dims(tf.range(num_words), 1),
-                                 [1, self.max_span_width])  # [num_words, max_span_width]
-      candidate_ends = candidate_starts + tf.expand_dims(tf.range(self.max_span_width),
-                                                         0)  # [num_words, max_span_width]
-      candidate_start_sentence_indices = tf.gather(flattened_sentence_indices,
-                                                   candidate_starts)  # [num_words, max_span_width]
-      candidate_end_sentence_indices = tf.gather(flattened_sentence_indices,
-                                                 tf.minimum(candidate_ends,
-                                                            num_words - 1))  # [num_words, max_span_width]
-      candidate_mask = tf.logical_and(candidate_ends < num_words, tf.equal(candidate_start_sentence_indices,
-                                                                           candidate_end_sentence_indices))  # [num_words, max_span_width]
-      flattened_candidate_mask = tf.reshape(candidate_mask, [-1])  # [num_words * max_span_width]
-      candidate_starts = tf.boolean_mask(tf.reshape(candidate_starts, [-1]),
-                                         flattened_candidate_mask)  # [num_candidates]
-      candidate_ends = tf.boolean_mask(tf.reshape(candidate_ends, [-1]), flattened_candidate_mask)  # [num_candidates]
-      candidate_sentence_indices = tf.boolean_mask(tf.reshape(candidate_start_sentence_indices, [-1]),
-                                                   flattened_candidate_mask)  # [num_candidates]
-
-      topic_start = topic_start_index
-      topic_end = topic_end_index
-      # 获得topic的embedding
-      topic_emb = self.get_span_emb(context_outputs, topic_start, topic_end)  # [1,emb]
-
-      # candidate_cluster_ids = self.get_candidate_labels(candidate_starts, candidate_ends, gold_starts, gold_ends, cluster_ids) # [num_candidates]
-
-      # 获得span的embedding, 给出span的开始和结束索引
-      candidate_span_emb = self.get_span_emb(context_outputs, candidate_starts, candidate_ends)  # [num_candidates, emb]
-      candidate_mention_scores = self.get_mention_scores(candidate_span_emb, "post_topic")  # [k, 1]   #通过一个前馈神经网络获得值
-      candidate_mention_scores = tf.squeeze(candidate_mention_scores, 1)  # [k]
-
-      k = tf.to_int32(tf.floor(tf.to_float(tf.shape(context_outputs)[0]) * self.config["top_span_ratio"]))  # 确定top k
-      # 使用自定义的操作对span排序
-      top_span_indices = coref_ops.extract_spans(tf.expand_dims(candidate_mention_scores, 0),
-                                                 tf.expand_dims(candidate_starts, 0),
-                                                 tf.expand_dims(candidate_ends, 0),
-                                                 tf.expand_dims(k, 0),
-                                                 util.shape(context_outputs, 0),
-                                                 True)  # [1, k]
-      top_span_indices.set_shape([1, None])
-      top_span_indices = tf.squeeze(top_span_indices, 0)  # [k]
-
-      top_span_starts = tf.gather(candidate_starts, top_span_indices)  # [k]   根据选出的top k span，将对应span的start位置取出
-      top_span_ends = tf.gather(candidate_ends, top_span_indices)  # [k]
-      top_span_emb = tf.gather(candidate_span_emb, top_span_indices)  # [k, emb]
-      # top_span_cluster_ids = tf.gather(candidate_cluster_ids, top_span_indices) # [k]     cluster id  用不到
-      top_span_mention_scores = tf.gather(candidate_mention_scores, top_span_indices)  # [k]
-      top_span_sentence_indices = tf.gather(candidate_sentence_indices, top_span_indices)  # [k]
-      # top_span_speaker_ids = tf.gather(speaker_ids, top_span_starts) # [k]      speaker 用不到
-
-      c = tf.minimum(self.config["max_top_antecedents"], k)  # 每个span，最多c个先行词
-
-      # 剪枝
-      if self.config["coarse_to_fine"]:
-        top_antecedents, top_antecedents_mask, top_fast_antecedent_scores, top_antecedent_offsets = self.coarse_to_fine_pruning(
-          top_span_emb, top_span_mention_scores, c)
-      else:
-        top_antecedents, top_antecedents_mask, top_fast_antecedent_scores, top_antecedent_offsets = self.distance_pruning(
-          top_span_emb, top_span_mention_scores, c)
-
-      dummy_scores = tf.zeros([k, 1])  # [k, 1]
-      for i in range(self.config["coref_depth"]):
-        with tf.variable_scope("post_coref_layer", reuse=(i > 0)):
-          top_antecedent_emb = tf.gather(top_span_emb, top_antecedents)  # [k, c, emb]
-          top_antecedent_scores = top_fast_antecedent_scores + self.get_slow_antecedent_scores(top_span_emb,
-                                                                                               top_antecedents,
-                                                                                               top_antecedent_emb,
-                                                                                               top_antecedent_offsets)  # [k, c]  考虑了距离、相似性、元信息等特征计算的得分
-          top_antecedent_weights = tf.nn.softmax(tf.concat([dummy_scores, top_antecedent_scores], 1))  # [k, c + 1]
-          top_antecedent_emb = tf.concat([tf.expand_dims(top_span_emb, 1), top_antecedent_emb], 1)  # [k, c + 1, emb]
-          attended_span_emb = tf.reduce_sum(tf.expand_dims(top_antecedent_weights, 2) * top_antecedent_emb,
-                                            1)  # [k, emb]
-          with tf.variable_scope("post_f"):
-            f = tf.sigmoid(
-              util.projection(tf.concat([top_span_emb, attended_span_emb], 1),
-                              util.shape(top_span_emb, -1)))  # [k, emb]
-            top_span_emb = f * attended_span_emb + (1 - f) * top_span_emb  # [k, emb]
-
-      top_antecedent_scores = tf.concat([dummy_scores, top_antecedent_scores], 1)  # [k, c + 1]
-      '''
-
-      top_antecedent_cluster_ids = tf.gather(top_span_cluster_ids, top_antecedents) # [k, c]   top antecedent对应的cluster id
-      top_antecedent_cluster_ids += tf.to_int32(tf.log(tf.to_float(top_antecedents_mask))) # [k, c]
-      same_cluster_indicator = tf.equal(top_antecedent_cluster_ids, tf.expand_dims(top_span_cluster_ids, 1)) # [k, c]
-      non_dummy_indicator = tf.expand_dims(top_span_cluster_ids > 0, 1) # [k, 1]
-      pairwise_labels = tf.logical_and(same_cluster_indicator, non_dummy_indicator) # [k, c]
-      dummy_labels = tf.logical_not(tf.reduce_any(pairwise_labels, 1, keepdims=True)) # [k, 1]
-      top_antecedent_labels = tf.concat([dummy_labels, pairwise_labels], 1) # [k, c + 1]
-
-      '''
-
-      # loss = self.softmax_loss(top_antecedent_scores, top_antecedent_labels) # [k]   计算损失函数，但是没有用到实际的label呀
-      # loss = tf.reduce_sum(loss) # []
-
-      return topic_emb, top_span_emb, top_span_mention_scores, top_antecedent_emb, top_antecedent_scores
-
-  def get_span_emb(self, context_outputs, span_starts, span_ends):
+  def get_span_emb(self, head_emb, context_outputs, span_starts, span_ends, span_name):
     span_emb_list = []
 
     span_start_emb = tf.gather(context_outputs, span_starts) # [k, emb]   此处输入context_output是一个句子的集合？还是句子中每个单词的集合
@@ -910,32 +838,33 @@ class CorefModel(object):
     span_end_emb = tf.gather(context_outputs, span_ends) # [k, emb]
     span_emb_list.append(span_end_emb)
 
-    #span_width = 1 + span_ends - span_starts # [k]
+    span_width = 1 + span_ends - span_starts # [k]
     #span_width = list(map(operator.sub, [x+1 for x in span_ends], span_starts))
 
 
-    '''
-    if self.config["use_features"]:    #span也考虑特征
-      span_width_index = span_width - 1 # [k]
-      span_width_emb = tf.gather(tf.get_variable("span_width_embeddings", [self.config["max_span_width"], self.config["feature_size"]]), span_width_index) # [k, emb]
-      span_width_emb = tf.nn.dropout(span_width_emb, self.dropout)
-      span_emb_list.append(span_width_emb)
-    '''
 
-    '''
+    # if self.config["use_features"]:    #span也考虑特征, span 宽度embedding
+    #   span_width_index = span_width - 1 # [k]
+    #   with tf.variable_scope("{}".format(span_name)):
+    #     span_width_emb = tf.gather(tf.get_variable("span_width_embeddings", [self.config["max_span_width"], self.config["feature_size"]]), span_width_index) # [k, emb]
+    #   span_width_emb = tf.nn.dropout(span_width_emb, self.dropout)
+    #   span_emb_list.append(span_width_emb)
+
+
     if self.config["model_heads"]:   #head attention部分  猜测
       span_indices = tf.expand_dims(tf.range(self.config["max_span_width"]), 0) + tf.expand_dims(span_starts, 1) # [k, max_span_width]
       span_indices = tf.minimum(util.shape(context_outputs, 0) - 1, span_indices) # [k, max_span_width]
       span_text_emb = tf.gather(head_emb, span_indices) # [k, max_span_width, emb]
       with tf.variable_scope("head_scores"):
-        self.head_scores = util.projection(context_outputs, 1) # [num_words, 1]
+          with tf.variable_scope("{}".format(span_name)):
+            self.head_scores = util.projection(context_outputs, 1) # [num_words, 1]
       span_head_scores = tf.gather(self.head_scores, span_indices) # [k, max_span_width, 1]
       span_mask = tf.expand_dims(tf.sequence_mask(span_width, self.config["max_span_width"], dtype=tf.float32), 2) # [k, max_span_width, 1]
       span_head_scores += tf.log(span_mask) # [k, max_span_width, 1]
       span_attention = tf.nn.softmax(span_head_scores, 1) # [k, max_span_width, 1]
       span_head_emb = tf.reduce_sum(span_attention * span_text_emb, 1) # [k, emb]
       span_emb_list.append(span_head_emb)
-    '''
+
     print("span_emb_list shap： ", np.array(span_emb_list).shape)
     span_emb = tf.concat(span_emb_list, 1) # [k, emb]   生成的各个embedding拼接起来
     return span_emb # [k, emb]
@@ -1128,7 +1057,7 @@ class CorefModel(object):
     #coref_evaluator = metrics.CorefEvaluator()
 
     for example_num, (tensorized_example, example) in enumerate(self.eval_data):    # example为载入的原始json数据
-      pre_topic_start_index, pre_topic_end_index, post_topic_start_index, post_topic_end_index, pre_tokens, post_tokens, pre_context_word_emb, post_context_word_emb, pre_lm_emb, post_lm_emb, pre_text_len, post_text_len, is_training, label = tensorized_example
+      #pre_topic_start_index, pre_topic_end_index, post_topic_start_index, post_topic_end_index, pre_tokens, post_tokens, pre_context_word_emb, post_context_word_emb, pre_lm_emb, post_lm_emb, pre_text_len, post_text_len, is_training, label = tensorized_example
       #_, _, _, _, _, _, _, _, _, gold_starts, gold_ends, _ = tensorized_example
       feed_dict = {i:t for i,t in zip(self.input_tensors, tensorized_example)}
       #candidate_starts, candidate_ends, candidate_mention_scores, top_span_starts, top_span_ends, top_antecedents, top_antecedent_scores = session.run(self.predictions, feed_dict=feed_dict)
@@ -1149,15 +1078,41 @@ class CorefModel(object):
     summary_dict = {}
     #conll_results = conll.evaluate_conll(self.config["conll_eval_path"], coref_predictions, official_stdout)
     #average_f1 = sum(results["f"] for results in conll_results.values()) / len(conll_results)
-    precision, recall, f = evaluate.evaluate(coref_predictions, self.config)
-    summary_dict["Average F1 (py)"] = f
-    print("Average F1 (py): {:.2f}%".format(f))
 
-    # p,r,f = coref_evaluator.get_prf()
+    # accuracy, precision_macro, precision_micro, recall_macro, recall_micro, f_macro, f_micro = evaluate.evaluate(
+    #     coref_predictions, self.config)
+    # accuracy, precision, recall, f, precision_macro, recall_macro, f_macro = evaluate.evaluate(coref_predictions, self.config)
+    accuracy, precision_macro, recall_macro, f_macro = evaluate.evaluate(coref_predictions, self.config)
 
-    summary_dict["Average precision (py)"] = precision
-    print("Average precision (py): {:.2f}%".format(precision))
-    summary_dict["Average recall (py)"] = recall
-    print("Average recall (py): {:.2f}%".format(recall))
+    summary_dict["Average accuracy (py)"] = accuracy
+    print("Average accuracy (py): {:.4f}".format(accuracy))
 
-    return util.make_summary(summary_dict), f, precision, recall
+    summary_dict["Average F1 (py)"] = f_macro
+    # print("Average F1 (py): {:.4f}".format(f_macro))
+
+    summary_dict["Average precision (py)"] = precision_macro
+    # print("Average precision (py): {:.4f}".format(precision_macro))
+
+    summary_dict["Average recall (py)"] = recall_macro
+    # print("Average recall (py): {:.4f}".format(recall_macro))
+
+    # summary_dict["Average F1 self_compute (py)"] = f
+    # print("Average F1 self_compute (py): {:.4f}%".format(f))
+    #
+    # summary_dict["Average precision self_compute (py)"] = precision
+    # print("Average precision self_compute (py): {:.4f}%".format(precision))
+    #
+    # summary_dict["Average recall self_compute (py)"] = recall
+    # print("Average recall self_compute (py): {:.4f}%".format(recall))
+    #
+    # summary_dict["Average F1 micro (py)"] = f_micro
+    # print("Average F1 micro (py): {:.4f}%".format(f_micro))
+    #
+    # summary_dict["Average precision micro (py)"] = precision_micro
+    # print("Average precision micro (py): {:.4f}%".format(precision_micro))
+    #
+    # summary_dict["Average recall micro (py)"] = recall_micro
+    # print("Average recall micro (py): {:.4f}%".format(recall_micro))
+
+    return util.make_summary(summary_dict), accuracy, f_macro, precision_macro, recall_macro
+

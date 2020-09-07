@@ -573,7 +573,7 @@ class CorefModel(object):
     # return tf.reduce_sum(result)
 
   def topic_span_similarity(self, topic_emb, span_emb, dim):
-      similarity = self.topic_span_euclidean(topic_emb, span_emb, dim)
+      similarity = self.topic_span_cosin(topic_emb, span_emb, dim)
       # similarity = self.topic_span_manhattan(topic_emb, span_emb, dim)
       return similarity
 
